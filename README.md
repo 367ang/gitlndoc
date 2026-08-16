@@ -1,24 +1,54 @@
-# Git 学习笔记
+# Git 学习游戏设计
 
-> 关于 Git 版本控制系统的系统性学习笔记，涵盖基础概念到最佳实践。
+> 以 Git 学习为核心的游戏设计仓库：基于系统性的 Git 学习笔记，构建「修复时间线的 Git 教学游戏」。
 
 ## 简介
 
-本仓库是一套完整的 Git 学习文档，适合初学者入门及有经验的开发者查阅参考。所有文档以中文编写，配有丰富的命令示例和真实使用场景，帮助读者快速理解并掌握 Git 的核心用法。
+本仓库的核心是 **Git 学习游戏设计**：
+
+- `game-design.md` 是游戏设计文档（GDD），是整个项目的核心；
+- `notes/` 目录下的 Git 学习笔记是游戏内容与关卡设计的知识依据；
+- `other/` 目录保存暂时用途未定的文件；
+- `practice/` 目录存放用于练习 Git 操作的临时文件。
+
+## 🗂️ 仓库结构
+
+```
+.
+├── game-design.md            # 游戏设计文档（核心）
+├── notes/                    # Git 学习笔记（游戏设计的知识依据）
+│   ├── git-basics.md
+│   ├── git-basic-operations.md
+│   ├── git-branches.md
+│   ├── git-remotes.md
+│   ├── git-undo.md
+│   ├── git-tags.md
+│   ├── git-faq.md
+│   ├── git-best-practices.md
+│   └── git-cheatsheet.md
+├── practice/                 # 练习 Git 操作的临时文件
+│   ├── a.txt
+│   ├── b.txt
+│   └── c.txt
+├── other/                    # 暂存用途未定的文件
+│   ├── figma-remote-server.md
+│   └── frontend-changes.md
+└── README.md
+```
 
 ## 📚 文档目录
 
 | 文档 | 内容简介 |
 |------|---------|
-| [Git基础概念](./Git基础概念.md) | 工作区、暂存区、本地仓库、远程仓库的概念及 Git 对象模型 |
-| [Git基础操作](./Git基础操作.md) | 日常开发中最常用的命令：init、add、commit、log 等 |
-| [Git分支管理](./Git分支管理.md) | 分支的创建、切换、合并、删除及主流工作流介绍 |
-| [Git远程操作](./Git远程操作.md) | 远程仓库管理、fetch/pull/push、Fork 工作流 |
-| [Git撤销操作](./Git撤销操作.md) | restore、reset、revert 的区别与使用场景 |
-| [Git标签管理](./Git标签管理.md) | 标签创建、推送、语义化版本及发布流程 |
-| [Git常见问题](./Git常见问题.md) | 合并冲突、推送被拒、文件恢复、性能问题等常见场景解决方案 |
-| [Git最佳实践](./Git最佳实践.md) | 提交规范、分支策略、团队协作及安全注意事项 |
-| [Git学习笔记](./Git学习笔记.md) | 综合命令速查表及工作流程总览 |
+| [Git基础概念](./notes/git-basics.md) | 工作区、暂存区、本地仓库、远程仓库的概念及 Git 对象模型 |
+| [Git基础操作](./notes/git-basic-operations.md) | 日常开发中最常用的命令：init、add、commit、log 等 |
+| [Git分支管理](./notes/git-branches.md) | 分支的创建、切换、合并、删除及主流工作流介绍 |
+| [Git远程操作](./notes/git-remotes.md) | 远程仓库管理、fetch/pull/push、Fork 工作流 |
+| [Git撤销操作](./notes/git-undo.md) | restore、reset、revert 的区别与使用场景 |
+| [Git标签管理](./notes/git-tags.md) | 标签创建、推送、语义化版本及发布流程 |
+| [Git常见问题](./notes/git-faq.md) | 合并冲突、推送被拒、文件恢复、性能问题等常见场景解决方案 |
+| [Git最佳实践](./notes/git-best-practices.md) | 提交规范、分支策略、团队协作及安全注意事项 |
+| [Git学习笔记](./notes/git-cheatsheet.md) | 综合命令速查表及工作流程总览 |
 
 ## 🗺️ 知识结构
 

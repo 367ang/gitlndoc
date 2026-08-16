@@ -198,7 +198,7 @@
 
 ### 6.4 关卡与内容数据
 - 关卡配置以 **JSON/YAML Schema** 定义（目标状态、命令序列、提示、评分参数），便于扩展。
-- 笔记知识点 → 关卡映射表由 `frontend-changes.md` 的模块化拆分对应。
+- 笔记知识点 → 关卡映射表由 `other/frontend-changes.md` 的模块化拆分对应。
 
 ### 6.5 持久化
 - 关卡进度、得分、成就 → **localStorage / IndexedDB**（单机无后端）。
