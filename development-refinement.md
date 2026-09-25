@@ -296,8 +296,8 @@ menu ─→ gameComplete（全部通关后菜单可进入结局）
 
 | 章节 | 关卡数 | 主要命令集（gitApi） | 关联笔记 | 输入模式 |
 |---|---|---|---|---|
-| 一 基础概念 | 4 (1-1~1-4) | init, status, log | 第一章 1-1~1-4 | 菜单式 |
-| 二 基础操作 | 4 (2-1~2-4) | add, commit, .gitignore | 第二章 2-1~2-4 | 半拼 |
+| 一 基础概念 | 4 (1-1~1-4) | init, add, commit | 第一章 1-1~1-4 | 菜单式 |
+| 二 基础操作 | 4 (2-1~2-4) | status, diff, log, rm, .gitignore | 第二章 2-1~2-4 | 半拼 |
 | 三 分支管理 | 6 (3-1~3-6) | branch, checkout, merge, rebase, stash | 第三章 3-1~3-6 | 半拼/自由 |
 | 四 远程操作 | 5 (4-1~4-5) | remote, push, fetch, pull, clone | 第四章 4-1~4-5 | 半拼 |
 | 五 撤销操作 | 6 (5-1~5-6) | reset, revert, checkout --, restore | 第五章 5-1~5-6 | 自由 |
