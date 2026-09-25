@@ -1,0 +1,60 @@
+/* 命令行输入区（§9.1 Terminal）
+ * 颜色一律取自 tokens.css 的 --gtp-* 变量，不硬编码。 */
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: var(--gtp-space-2);
+  padding: var(--gtp-space-2) var(--gtp-space-3);
+  background: var(--gtp-color-surface-raised);
+  border: 1px solid var(--gtp-color-border);
+  border-radius: var(--gtp-radius-md);
+}
+
+.bar:focus-within {
+  border-color: var(--gtp-color-pulse);
+  box-shadow: var(--gtp-shadow-glow-pulse);
+}
+
+.prompt {
+  font-family: var(--gtp-font-mono);
+  color: var(--gtp-color-branch-teal);
+  font-weight: 700;
+  user-select: none;
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-family: var(--gtp-font-mono);
+  font-size: var(--gtp-font-size-sm);
+  color: var(--gtp-color-text);
+}
+
+.input::placeholder {
+  color: var(--gtp-color-text-dim);
+}
+
+.run {
+  padding: var(--gtp-space-1) var(--gtp-space-3);
+  background: var(--gtp-color-nebula-deep);
+  border: 1px solid var(--gtp-color-nebula);
+  border-radius: var(--gtp-radius-sm);
+  color: var(--gtp-color-text);
+  font-size: var(--gtp-font-size-xs);
+  transition: background var(--gtp-duration-fast) var(--gtp-ease-out);
+}
+
+.run:hover:not(:disabled) {
+  background: var(--gtp-color-nebula);
+}
+
+.run:disabled {
+  background: transparent;
+  border-color: var(--gtp-color-border);
+  color: var(--gtp-color-text-dim);
+  cursor: not-allowed;
+}

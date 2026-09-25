@@ -1,0 +1,71 @@
+/* 提交历史面板（§9.1 GitGraph 的 M1 极简替代）
+ * 颜色一律取自 tokens.css 的 --gtp-* 变量，不硬编码。 */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--gtp-color-surface);
+  border: 1px solid var(--gtp-color-border);
+  border-radius: var(--gtp-radius-lg);
+  box-shadow: var(--gtp-shadow-md);
+}
+
+.head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--gtp-space-3);
+  padding: var(--gtp-space-3) var(--gtp-space-4);
+  border-bottom: 1px solid var(--gtp-color-border);
+}
+
+.title {
+  font-size: var(--gtp-font-size-sm);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--gtp-color-nebula-soft);
+  text-transform: uppercase;
+}
+
+.meta {
+  font-size: var(--gtp-font-size-xs);
+  color: var(--gtp-color-text-muted);
+}
+
+.list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: var(--gtp-space-3) var(--gtp-space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--gtp-space-2);
+  list-style: none;
+}
+
+.item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--gtp-space-3);
+  font-family: var(--gtp-font-mono);
+  font-size: var(--gtp-font-size-sm);
+}
+
+.hash {
+  flex-shrink: 0;
+  padding: 0 var(--gtp-space-1);
+  border-radius: var(--gtp-radius-sm);
+  color: var(--gtp-color-star);
+}
+
+.message {
+  color: var(--gtp-color-text);
+  overflow-wrap: anywhere;
+}
+
+.empty {
+  color: var(--gtp-color-text-dim);
+  font-size: var(--gtp-font-size-sm);
+}

@@ -1,0 +1,110 @@
+/* 全局 reset 与主题应用（development-refinement.md §3 / §9.2）
+ * 引用设计令牌，统一基础排版与深空背景。
+ */
+
+@import './tokens.css';
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--gtp-color-space);
+  /* 深空背景：星云紫与脉冲蓝的稀薄辉光 */
+  background-image:
+    radial-gradient(circle at 15% 0%, rgb(160 107 255 / 18%), transparent 55%),
+    radial-gradient(circle at 85% 100%, rgb(56 182 255 / 14%), transparent 55%);
+  background-attachment: fixed;
+  color: var(--gtp-color-text);
+  font-family: var(--gtp-font-sans);
+  font-size: var(--gtp-font-size-md);
+  line-height: var(--gtp-line-height-normal);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p,
+figure,
+blockquote,
+dl,
+dd {
+  margin: 0;
+}
+
+h1 {
+  font-size: var(--gtp-font-size-3xl);
+}
+h2 {
+  font-size: var(--gtp-font-size-2xl);
+}
+h3 {
+  font-size: var(--gtp-font-size-xl);
+}
+
+ul,
+ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+a {
+  color: var(--gtp-color-pulse);
+  text-decoration: none;
+}
+a:hover {
+  color: var(--gtp-color-pulse-soft);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family: var(--gtp-font-mono);
+  font-size: var(--gtp-font-size-sm);
+}
+
+/* 键盘可达性：统一焦点环 */
+:focus-visible {
+  outline: 2px solid var(--gtp-color-pulse);
+  outline-offset: 2px;
+}
+
+/* 滚动条适配深空主题 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--gtp-color-void);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--gtp-color-border-strong);
+  border-radius: var(--gtp-radius-pill);
+}

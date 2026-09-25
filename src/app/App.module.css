@@ -1,0 +1,25 @@
+/* 根组件（§3 App / §5 视图状态机）
+ * 颜色一律取自 tokens.css 的 --gtp-* 变量，不硬编码。 */
+
+.app {
+  height: 100%;
+}
+
+.boot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  margin: 0;
+  color: var(--gtp-color-text-muted);
+  letter-spacing: 0.1em;
+}
+
+.bootError {
+  margin: 0;
+  padding: var(--gtp-space-2) var(--gtp-space-4);
+  background: var(--gtp-color-surface-raised);
+  border-bottom: 1px solid var(--gtp-color-danger);
+  color: var(--gtp-color-danger);
+  font-size: var(--gtp-font-size-sm);
+}

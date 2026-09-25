@@ -1,0 +1,88 @@
+/* 设计令牌（development-refinement.md §9.2）
+ * 主题：「时空穿梭 / 星际」—— 深空背景、星云紫、脉冲蓝，分支用暖橙 / 青绿。
+ * 命名前缀统一为 --gtp-（git time traveler）；全局字号、圆角、间距均由此控制。
+ */
+
+:root {
+  /* ── 深空背景（由外向内逐层提亮） ── */
+  --gtp-color-void: #05060f; /* 最外层真空 */
+  --gtp-color-space: #0b0f24; /* 页面背景 */
+  --gtp-color-surface: #141a38; /* 面板背景 */
+  --gtp-color-surface-raised: #1d2650; /* 浮起面板 / 卡片 */
+  --gtp-color-border: #2b3566; /* 常规描边 */
+  --gtp-color-border-strong: #3d4a86; /* 强调描边 */
+
+  /* ── 文本 ── */
+  --gtp-color-text: #e6ebff; /* 正文 */
+  --gtp-color-text-muted: #97a3cf; /* 次要说明 */
+  --gtp-color-text-dim: #626d96; /* 禁用 / 占位 */
+
+  /* ── 星云紫（主色，供主按钮与选中态） ── */
+  --gtp-color-nebula: #a06bff;
+  --gtp-color-nebula-soft: #c7a4ff;
+  --gtp-color-nebula-deep: #6d3ed6;
+
+  /* ── 脉冲蓝（交互 / 聚焦 / 链接） ── */
+  --gtp-color-pulse: #38b6ff;
+  --gtp-color-pulse-soft: #7fd4ff;
+  --gtp-color-pulse-deep: #1d7fc4;
+
+  /* ── 分支色（暖橙 / 青绿，另有紫与蓝作补充分支） ── */
+  --gtp-color-branch-warm: #ff9f45; /* 暖橙 */
+  --gtp-color-branch-teal: #2fd6b3; /* 青绿 */
+  --gtp-color-branch-purple: #a06bff;
+  --gtp-color-branch-blue: #38b6ff;
+
+  /* ── 游戏语义色 ── */
+  --gtp-color-success: #2fd6b3; /* 目标达成 */
+  --gtp-color-warning: #ffc247; /* 提示 / 警告 */
+  --gtp-color-danger: #ff5c7a; /* 失败 / 撤销惩罚 */
+  --gtp-color-star: #ffd166; /* 星级 */
+
+  /* ── 字体族 ── */
+  --gtp-font-sans: 'Inter', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', system-ui,
+    sans-serif;
+  --gtp-font-mono: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, 'Courier New', monospace;
+  --gtp-font-size-xs: 0.75rem; /* 12px */
+  --gtp-font-size-sm: 0.875rem; /* 14px */
+  --gtp-font-size-md: 1rem; /* 16px */
+  --gtp-font-size-lg: 1.25rem; /* 20px */
+  --gtp-font-size-xl: 1.5rem; /* 24px */
+  --gtp-font-size-2xl: 2rem; /* 32px */
+  --gtp-font-size-3xl: 2.5rem; /* 40px */
+  --gtp-line-height-tight: 1.25;
+  --gtp-line-height-normal: 1.6;
+
+  /* ── 间距阶（4px 基准） ── */
+  --gtp-space-1: 0.25rem;
+  --gtp-space-2: 0.5rem;
+  --gtp-space-3: 0.75rem;
+  --gtp-space-4: 1rem;
+  --gtp-space-5: 1.5rem;
+  --gtp-space-6: 2rem;
+  --gtp-space-7: 3rem;
+
+  /* ── 圆角 ── */
+  --gtp-radius-sm: 4px;
+  --gtp-radius-md: 8px;
+  --gtp-radius-lg: 12px;
+  --gtp-radius-pill: 999px;
+
+  /* ── 阴影（深空场景以辉光替代灰色投影） ── */
+  --gtp-shadow-sm: 0 1px 3px rgb(0 0 0 / 45%);
+  --gtp-shadow-md: 0 4px 14px rgb(0 0 0 / 50%);
+  --gtp-shadow-lg: 0 12px 32px rgb(0 0 0 / 60%);
+  --gtp-shadow-glow-nebula: 0 0 16px rgb(160 107 255 / 45%);
+  --gtp-shadow-glow-pulse: 0 0 16px rgb(56 182 255 / 45%);
+
+  /* ── 层级 ── */
+  --gtp-z-panel: 10;
+  --gtp-z-overlay: 100;
+  --gtp-z-modal: 1000;
+  --gtp-z-toast: 1100;
+
+  /* ── 动效 ── */
+  --gtp-duration-fast: 120ms;
+  --gtp-duration-normal: 240ms;
+  --gtp-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+}

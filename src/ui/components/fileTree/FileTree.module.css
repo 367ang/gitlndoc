@@ -1,0 +1,119 @@
+/* 虚拟文件树（§9.1 FileTree / 状态树）
+ * 颜色一律取自 tokens.css 的 --gtp-* 变量，不硬编码。 */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--gtp-color-surface);
+  border: 1px solid var(--gtp-color-border);
+  border-radius: var(--gtp-radius-lg);
+  box-shadow: var(--gtp-shadow-md);
+}
+
+.head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--gtp-space-3);
+  padding: var(--gtp-space-3) var(--gtp-space-4);
+  border-bottom: 1px solid var(--gtp-color-border);
+}
+
+.title {
+  font-size: var(--gtp-font-size-sm);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--gtp-color-nebula-soft);
+  text-transform: uppercase;
+}
+
+.meta {
+  font-size: var(--gtp-font-size-xs);
+  color: var(--gtp-color-text-muted);
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--gtp-space-3) var(--gtp-space-4);
+}
+
+.tree,
+.children {
+  padding-left: 0;
+}
+
+.children {
+  padding-left: var(--gtp-space-4);
+  border-left: 1px dashed var(--gtp-color-border);
+  margin-left: 0.35rem;
+}
+
+.node {
+  line-height: var(--gtp-line-height-tight);
+}
+
+.dir,
+.file {
+  display: flex;
+  align-items: center;
+  gap: var(--gtp-space-2);
+  padding: 0.15rem 0;
+  font-family: var(--gtp-font-mono);
+  font-size: var(--gtp-font-size-sm);
+}
+
+.dir {
+  color: var(--gtp-color-pulse-soft);
+}
+
+.dirIcon {
+  color: var(--gtp-color-text-dim);
+}
+
+.file {
+  color: var(--gtp-color-text);
+}
+
+.marks {
+  display: inline-flex;
+  gap: var(--gtp-space-1);
+}
+
+.mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  border-radius: var(--gtp-radius-sm);
+  font-size: var(--gtp-font-size-xs);
+  font-weight: 700;
+  border: 1px solid currentColor;
+}
+
+.mark[data-state='staged'] {
+  color: var(--gtp-color-success);
+}
+
+.mark[data-state='modified'] {
+  color: var(--gtp-color-warning);
+}
+
+.mark[data-state='untracked'] {
+  color: var(--gtp-color-pulse);
+}
+
+.empty,
+.loading {
+  margin: 0;
+  color: var(--gtp-color-text-dim);
+  font-size: var(--gtp-font-size-sm);
+}
+
+.loading {
+  padding: 0 var(--gtp-space-4) var(--gtp-space-3);
+  color: var(--gtp-color-text-muted);
+}

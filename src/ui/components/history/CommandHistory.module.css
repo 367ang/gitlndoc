@@ -1,0 +1,60 @@
+/* 命令历史（§9.1 Terminal）
+ * 颜色一律取自 tokens.css 的 --gtp-* 变量，不硬编码。 */
+
+.scroller {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--gtp-color-void);
+  border-radius: var(--gtp-radius-md);
+  padding: var(--gtp-space-3) var(--gtp-space-4);
+}
+
+.log {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gtp-space-3);
+  font-family: var(--gtp-font-mono);
+  font-size: var(--gtp-font-size-sm);
+}
+
+.hint {
+  margin: 0;
+  color: var(--gtp-color-text-dim);
+  font-family: var(--gtp-font-mono);
+  font-size: var(--gtp-font-size-sm);
+  white-space: pre-wrap;
+}
+
+.entry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gtp-space-1);
+}
+
+.command {
+  margin: 0;
+  color: var(--gtp-color-text);
+  display: flex;
+  gap: var(--gtp-space-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.prompt {
+  color: var(--gtp-color-branch-teal);
+}
+
+.output {
+  margin: 0;
+  color: var(--gtp-color-text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.error {
+  margin: 0;
+  color: var(--gtp-color-danger);
+  white-space: pre-wrap;
+  word-break: break-word;
+}

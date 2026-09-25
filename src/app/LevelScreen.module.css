@@ -1,0 +1,92 @@
+/* 关卡主界面容器（§9.1 关卡主界面布局的 M1 极简版）
+ * 颜色一律取自 tokens.css 的 --gtp-* 变量，不硬编码。 */
+
+.screen {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gtp-space-4);
+  height: 100%;
+  padding: var(--gtp-space-4);
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--gtp-space-4);
+  padding: var(--gtp-space-3) var(--gtp-space-4);
+  background: var(--gtp-color-surface);
+  border: 1px solid var(--gtp-color-border);
+  border-radius: var(--gtp-radius-lg);
+  box-shadow: var(--gtp-shadow-sm);
+}
+
+.heading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gtp-space-1);
+}
+
+.title {
+  font-size: var(--gtp-font-size-lg);
+  font-weight: 600;
+  color: var(--gtp-color-text);
+}
+
+.objective {
+  font-size: var(--gtp-font-size-sm);
+  color: var(--gtp-color-text-muted);
+}
+
+.mode {
+  flex-shrink: 0;
+  padding: var(--gtp-space-1) var(--gtp-space-3);
+  border: 1px solid var(--gtp-color-border-strong);
+  border-radius: var(--gtp-radius-pill);
+  color: var(--gtp-color-nebula-soft);
+  font-size: var(--gtp-font-size-xs);
+  letter-spacing: 0.06em;
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: var(--gtp-space-4);
+  flex: 1;
+  min-height: 0;
+}
+
+.console {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gtp-space-3);
+  min-height: 0;
+  padding: var(--gtp-space-3) var(--gtp-space-4) var(--gtp-space-4);
+  background: var(--gtp-color-surface);
+  border: 1px solid var(--gtp-color-border);
+  border-radius: var(--gtp-radius-lg);
+  box-shadow: var(--gtp-shadow-md);
+}
+
+.panelTitle {
+  font-size: var(--gtp-font-size-sm);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--gtp-color-nebula-soft);
+  text-transform: uppercase;
+}
+
+.side {
+  display: grid;
+  grid-template-rows: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: var(--gtp-space-4);
+  min-height: 0;
+}
+
+/* 窄屏（M1 只保证桌面可用，此处避免布局崩坏） */
+@media (max-width: 900px) {
+  .columns {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}

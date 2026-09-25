@@ -18,7 +18,9 @@
 
 ## 当前状态
 
-前端正处于起步阶段。`package.json`、`vite.config.ts`、`tsconfig.json`/`tsconfig.node.json`、`index.html` 均已存在，但 **`src/` 目录尚未创建** —— `index.html` 中引用的 `/src/main.tsx` 正是 `development-refinement.md` §3 所规划的入口。开始 M1 工作时，请按 §3 建立 `src/` 骨架。
+**M1（地基）已完成** —— `src/` 骨架、`engine/`（`fs`/`gitApi`/`sandbox`/`errors`）、`game/command/`（`tokenize`/`grammar`/`executor`）、store 三件套、样式 token 与极简可跑 UI 均已落地；`typecheck` + `test` + `build` 三门禁通过，`init`/`add`/`commit` 在真实浏览器环境（jsdom DOM 交互）下已实证可跑通并可视化。下一阶段为 **M2（关卡框架 + 第一章可玩）**。
+
+M1 的实测环境事实（含两处对 `M1-preflight-DONE.md` §3 结论的**订正**）与遗留问题，记录在 `TODO/M1-tasks-DONE.md` 末尾的「实测环境事实」与「遗留问题」两节，**M2+ 动 `engine/` 前务必先读**。
 
 ## 命令
 
@@ -27,6 +29,7 @@ pnpm dev             # Vite 开发服务器（HMR）
 pnpm build           # tsc -b && vite build（构建包含类型检查）
 pnpm preview         # 预览生产构建产物
 pnpm typecheck       # tsc --noEmit（不产出文件的快速类型检查，提交前运行）
+pnpm test            # Vitest（watch 模式）；CI/单次运行用 `pnpm test:run` 或 `pnpm vitest run <file>`
 ```
 
 包管理器：**统一使用 pnpm**（与工程文档 §12 的技术选型一致）。`package.json` 中的 `scripts` 字段供 pnpm 调用，不要改用 npm。
@@ -37,7 +40,9 @@ pnpm typecheck       # tsc --noEmit（不产出文件的快速类型检查，提
 > ```
 > 同一原因也会导致 `gh` 不可见（影响推送）。
 
-当前尚未配置测试运行器（`package.json` 中没有 `test` 脚本），尽管工程文档 §11 要求引入 **Vitest + @testing-library/react**，测试置于 `src/__tests__/`。配置完成后，预期命令为 `pnpm test`，单测运行用 `pnpm vitest run <file>`。首批应编写的测试为 `tokenize.test.ts`、`scoring.test.ts`、`targetState.test.ts`、`executor.test.ts`（§11.1 单元测试），以及 `components.test.tsx`（§11.2 组件测试）。
+测试运行器已在 M1 配好：**Vitest + @testing-library/react**（`vite.config.ts` 的 `test` 字段，`environment: 'jsdom'`，`globals: true`），测试置于 `src/__tests__/`。5 个测试文件均已建立 —— `tokenize.test.ts`、`executor.test.ts` 为真实用例（49 个），`scoring.test.ts`、`targetState.test.ts`、`components.test.tsx` 为占位（`it.todo`，分别待 M3 与 UI 成型后填充）。
+
+> ⚠️ `src/__tests__/setup.ts` 里的 `import 'fake-indexeddb/auto'` **不可删除**：jsdom 不提供 `navigator.locks`，LightningFS 的 `DefaultBackend` 会因此回落到需要 `indexedDB` 的 `Mutex` 分支，删掉即全部测试报 `ReferenceError: indexedDB is not defined`。机理详见 `TODO/M1-tasks-DONE.md` 的「实测环境事实」第 2 条。
 
 依赖已安装，`pnpm-lock.yaml` 已生成（**应提交入库**）。另有一个 `pnpm-workspace.yaml`，其 `allowBuilds` 字段用于放行 esbuild 的安装脚本 —— 这是 pnpm 12 的默认安全机制，**不要删除该文件**，否则 `pnpm install` 会再次报 `ERR_PNPM_IGNORED_BUILDS`。若在他人机器上安装，请使用 `pnpm install`（而非 npm），以复用同一份 lockfile。
 
@@ -48,7 +53,7 @@ pnpm typecheck       # tsc --noEmit（不产出文件的快速类型检查，提
 - **`TODO/` 目录存放里程碑相关的规划与检查文档**，文件名以状态后缀区分：
   - `-DONE` —— 该文档描述的工作已处理完毕
   - `-TODO` —— 尚有未完成事项
-  当前含 `TODO/M1-preflight-DONE.md`（M1 前置环境检查，已完成）与 `TODO/M1-tasks-TODO.md`（M1 任务拆解，尚未执行）。更新状态时请同步调整文件名后缀，避免与实际进度不符。
+  当前含 `TODO/M1-preflight-DONE.md`（M1 前置环境检查）与 `TODO/M1-tasks-DONE.md`（M1 任务拆解与执行结果，**M2+ 动 `engine/` 前先读其末尾的「实测环境事实」**）。更新状态时请同步调整文件名后缀，避免与实际进度不符。下一里程碑的文档沿用 `-TODO` 后缀新建。
 - 设计文档（`game-design.md`、`development-refinement.md`）**已提交入库**，且成文于任何 `src/` 代码存在之前。本文件通篇引用的章节编号（§2–§14）目前在这些文档中是稳定的；但若你改动了这些文档，请同步更新此处的交叉引用。
 
 ## 架构（整体图景）
