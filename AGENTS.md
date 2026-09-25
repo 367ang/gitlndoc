@@ -22,6 +22,8 @@
 
 M1 的实测环境事实（含两处对 `M1-preflight-DONE.md` §3 结论的**订正**）与遗留问题，记录在 `TODO/M1-tasks-DONE.md` 末尾的「实测环境事实」与「遗留问题」两节，**M2+ 动 `engine/` 前务必先读**。
 
+**M2 任务清单已就绪**（`TODO/M2-tasks-TODO.md`），尚未执行。开工前另需注意：`development-refinement.md` §8 的「主要命令集」列曾与 GDD 不一致 —— 第一章被误写为 `init, status, log`、第二章被误写为 `add, commit, .gitignore`，**已于本次按 GDD 订正**为「一：`init, add, commit`」「二：`status, diff, log, rm, .gitignore`」。§8 是逐章核对过的，其余行与 GDD 一致（个别概括性差异，如三章未列 `switch`、六章列了 `show`/`describe`，属「主要命令」的合理列举）。**若再改 §8，务必与 `game-design.md` 第 4 节的关卡表逐行比对。**
+
 ## 命令
 
 ```bash
