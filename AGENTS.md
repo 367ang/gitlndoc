@@ -23,22 +23,32 @@
 ## 命令
 
 ```bash
-npm run dev          # Vite 开发服务器（HMR）
-npm run build        # tsc -b && vite build（构建包含类型检查）
-npm run preview      # 预览生产构建产物
-npm run typecheck    # tsc --noEmit（不产出文件的快速类型检查，提交前运行）
+pnpm dev             # Vite 开发服务器（HMR）
+pnpm build           # tsc -b && vite build（构建包含类型检查）
+pnpm preview         # 预览生产构建产物
+pnpm typecheck       # tsc --noEmit（不产出文件的快速类型检查，提交前运行）
 ```
 
-包管理器：文档中提到 `pnpm`，但本仓库的 `package.json` 直接使用 npm scripts —— 请统一使用 `npm run <script>`。
+包管理器：**统一使用 pnpm**（与工程文档 §12 的技术选型一致）。`package.json` 中的 `scripts` 字段供 pnpm 调用，不要改用 npm。
 
-当前尚未配置测试运行器（`package.json` 中没有 `test` 脚本），尽管工程文档 §11 要求引入 **Vitest + @testing-library/react**，测试置于 `src/__tests__/`。配置完成后，预期命令为 `npm test`，单测运行用 `npx vitest run <file>`。首批应编写的测试为 `tokenize.test.ts`、`scoring.test.ts`、`targetState.test.ts`、`executor.test.ts`（§11.1 单元测试），以及 `components.test.tsx`（§11.2 组件测试）。
+> ⚠️ **环境注意**：本机的 `node`/`pnpm` 位于 Homebrew 路径下，但沙箱 shell 的 PATH 默认不含该目录，直接调用会报 `command not found`。执行任何 Node 相关命令前先导出：
+> ```bash
+> export PATH="/opt/homebrew/opt/node/bin:/opt/homebrew/bin:$PATH"
+> ```
+> 同一原因也会导致 `gh` 不可见（影响推送）。
 
-依赖已在 `package.json` 中声明，但 **`node_modules/` 尚未安装，且没有提交任何 lockfile**。在运行 `npm run dev`/`build`/`typecheck` 之前须先执行 `npm install`，并应把生成的 `package-lock.json` 一并提交。
+当前尚未配置测试运行器（`package.json` 中没有 `test` 脚本），尽管工程文档 §11 要求引入 **Vitest + @testing-library/react**，测试置于 `src/__tests__/`。配置完成后，预期命令为 `pnpm test`，单测运行用 `pnpm vitest run <file>`。首批应编写的测试为 `tokenize.test.ts`、`scoring.test.ts`、`targetState.test.ts`、`executor.test.ts`（§11.1 单元测试），以及 `components.test.tsx`（§11.2 组件测试）。
+
+依赖已安装，`pnpm-lock.yaml` 已生成（**应提交入库**）。另有一个 `pnpm-workspace.yaml`，其 `allowBuilds` 字段用于放行 esbuild 的安装脚本 —— 这是 pnpm 12 的默认安全机制，**不要删除该文件**，否则 `pnpm install` 会再次报 `ERR_PNPM_IGNORED_BUILDS`。若在他人机器上安装，请使用 `pnpm install`（而非 npm），以复用同一份 lockfile。
 
 ## 仓库状态与注意事项
 
 - **`.gitignore` 已补齐**（涵盖 `node_modules/`、`dist/`、日志、编辑器与系统文件等）。历史提交 `08361a4`、`d1a259c` 曾声称添加过它，但此前工作树中并不存在；现有文件为本仓库实际的忽略规则来源。
 - **`README.md` 的结构树已过时**：其中仍列出 `practice/a.txt`、`b.txt`、`c.txt`（已在 `518d452` 中删除），且未包含 `development-refinement.md`、`AGENTS.md` 及各项构建配置文件。推断仓库布局时，请以本文件与 `development-refinement.md` 为准，而非 README 的结构树。
+- **`TODO/` 目录存放里程碑相关的规划与检查文档**，文件名以状态后缀区分：
+  - `-DONE` —— 该文档描述的工作已处理完毕
+  - `-TODO` —— 尚有未完成事项
+  当前含 `TODO/M1-preflight-DONE.md`（M1 前置环境检查，已完成）与 `TODO/M1-tasks-TODO.md`（M1 任务拆解，尚未执行）。更新状态时请同步调整文件名后缀，避免与实际进度不符。
 - 设计文档（`game-design.md`、`development-refinement.md`）**已提交入库**，且成文于任何 `src/` 代码存在之前。本文件通篇引用的章节编号（§2–§14）目前在这些文档中是稳定的；但若你改动了这些文档，请同步更新此处的交叉引用。
 
 ## 架构（整体图景）
