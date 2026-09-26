@@ -18,11 +18,20 @@
 
 ## 当前状态
 
-**M1（地基）已完成** —— `src/` 骨架、`engine/`（`fs`/`gitApi`/`sandbox`/`errors`）、`game/command/`（`tokenize`/`grammar`/`executor`）、store 三件套、样式 token 与极简可跑 UI 均已落地；`typecheck` + `test` + `build` 三门禁通过，`init`/`add`/`commit` 在真实浏览器环境（jsdom DOM 交互）下已实证可跑通并可视化。下一阶段为 **M2（关卡框架 + 第一章可玩）**。
+**M1（地基）已完成** —— `src/` 骨架、`engine/`（`fs`/`gitApi`/`sandbox`/`errors`）、`game/command/`（`tokenize`/`grammar`/`executor`）、store 三件套、样式 token 与极简可跑 UI 均已落地；`typecheck` + `test` + `build` 三门禁通过。
 
-M1 的实测环境事实（含两处对 `M1-preflight-DONE.md` §3 结论的**订正**）与遗留问题，记录在 `TODO/M1-tasks-DONE.md` 末尾的「实测环境事实」与「遗留问题」两节，**M2+ 动 `engine/` 前务必先读**。
+**M2（关卡框架 + 第一章可玩）已完成** —— `levels/`（`schema`/`presets`/`chapters/ch1` 四关）、`game/validate/`（`targetState`/`stepHints`/`stillMissingHint`）、`game/command/fragments.ts`（点击拼接纯函数层）、关卡 UI（`ui/components/level|goalPanel|terminal|menu|chapter`）均已落地；`LevelScreen` 已按 §3 规划从 `src/app/` 迁至 `src/ui/components/level/`。**第一章四关已在真实 Chrome（headless + CDP，真实键盘输入）中实证可完整通关**。三门禁：`typecheck` 0 / **143 passed | 12 todo** / `build` 约 153.9 kB gzip。下一阶段为 **M3（计分 / 星级 / 成就）**。
 
-**M2 任务清单已就绪**（`TODO/M2-tasks-TODO.md`），尚未执行。开工前另需注意：`development-refinement.md` §8 的「主要命令集」列曾与 GDD 不一致 —— 第一章被误写为 `init, status, log`、第二章被误写为 `add, commit, .gitignore`，**已于本次按 GDD 订正**为「一：`init, add, commit`」「二：`status, diff, log, rm, .gitignore`」。§8 是逐章核对过的，其余行与 GDD 一致（个别概括性差异，如三章未列 `switch`、六章列了 `show`/`describe`，属「主要命令」的合理列举）。**若再改 §8，务必与 `game-design.md` 第 4 节的关卡表逐行比对。**
+M1 的实测环境事实（含两处对 `M1-preflight-DONE.md` §3 结论的**订正**）与遗留问题，记录在 `TODO/M1-tasks-DONE.md` 末尾的「实测环境事实」与「遗留问题」两节。
+
+**M2 的执行结果、9 个实测缺陷、5 条新的实测环境事实与 3 项遗留，记录在 `TODO/M2-tasks-DONE.md`**。**M3+ 动 `engine/` 或做真实浏览器验收前务必先读其 §4「实测环境事实」与 §5「已知问题」**，要点：
+1. `gitApi.commit()` 允许真 git 会拒绝的**空提交**（`nothing to commit` 语义缺失）—— 建议 M3/M4 修，修复落点在 `executor.test.ts`。
+2. **「`git init` 创建仓库」类目标无法用状态判定表达**（`reset()` 总会先 init，且 `git init` 幂等）；纯只读命令（`status`/`log`/`diff`）关卡同理 —— **对 M4 第二章直接预警**。
+3. **jsdom 的 `fireEvent.change` 不受 `readOnly` 限制**，会掩盖「玩家无法输入」类缺陷；涉输入行为必须真实浏览器验证。
+4. LightningFS 对**目录**调 `readFile` 返回 `null` 而非抛错，判存在性必须用 `stat`。
+5. 本机真实浏览器验收需 `--no-sandbox --disable-crashpad`，键盘输入走 CDP `Input.insertText`。
+
+> 另需注意：`development-refinement.md` §8 的「主要命令集」列曾与 GDD 不一致 —— 第一章被误写为 `init, status, log`、第二章被误写为 `add, commit, .gitignore`，**已于 M2 开工前按 GDD 订正**为「一：`init, add, commit`」「二：`status, diff, log, rm, .gitignore`」。§8 是逐章核对过的，其余行与 GDD 一致（个别概括性差异，如三章未列 `switch`、六章列了 `show`/`describe`，属「主要命令」的合理列举）。**若再改 §8，务必与 `game-design.md` 第 4 节的关卡表逐行比对。**
 
 ## 命令
 
@@ -42,7 +51,7 @@ pnpm test            # Vitest（watch 模式）；CI/单次运行用 `pnpm test:
 > ```
 > 同一原因也会导致 `gh` 不可见（影响推送）。
 
-测试运行器已在 M1 配好：**Vitest + @testing-library/react**（`vite.config.ts` 的 `test` 字段，`environment: 'jsdom'`，`globals: true`），测试置于 `src/__tests__/`。5 个测试文件均已建立 —— `tokenize.test.ts`、`executor.test.ts` 为真实用例（49 个），`scoring.test.ts`、`targetState.test.ts`、`components.test.tsx` 为占位（`it.todo`，分别待 M3 与 UI 成型后填充）。
+测试运行器已在 M1 配好：**Vitest + @testing-library/react**（`vite.config.ts` 的 `test` 字段，`environment: 'jsdom'`，`globals: true`），测试置于 `src/__tests__/`。**M2 后共 6 个文件**：`tokenize.test.ts`(22)、`executor.test.ts`(27)、`targetState.test.ts`(32)、`components.test.tsx`(35)、`levels.test.ts`(27) 均为真实用例（**143 passed**）；仅 `scoring.test.ts` 仍为占位（12 个 `it.todo`，计分属 M3）。
 
 > ⚠️ `src/__tests__/setup.ts` 里的 `import 'fake-indexeddb/auto'` **不可删除**：jsdom 不提供 `navigator.locks`，LightningFS 的 `DefaultBackend` 会因此回落到需要 `indexedDB` 的 `Mutex` 分支，删掉即全部测试报 `ReferenceError: indexedDB is not defined`。机理详见 `TODO/M1-tasks-DONE.md` 的「实测环境事实」第 2 条。
 
@@ -55,7 +64,7 @@ pnpm test            # Vitest（watch 模式）；CI/单次运行用 `pnpm test:
 - **`TODO/` 目录存放里程碑相关的规划与检查文档**，文件名以状态后缀区分：
   - `-DONE` —— 该文档描述的工作已处理完毕
   - `-TODO` —— 尚有未完成事项
-  当前含 `TODO/M1-preflight-DONE.md`（M1 前置环境检查）与 `TODO/M1-tasks-DONE.md`（M1 任务拆解与执行结果，**M2+ 动 `engine/` 前先读其末尾的「实测环境事实」**）。更新状态时请同步调整文件名后缀，避免与实际进度不符。下一里程碑的文档沿用 `-TODO` 后缀新建。
+  当前含 `TODO/M1-preflight-DONE.md`（M1 前置环境检查）、`TODO/M1-tasks-DONE.md`（M1 任务拆解与执行结果）与 `TODO/M2-tasks-DONE.md`（M2 任务拆解与执行结果，**M3+ 动 `engine/` 或做真实浏览器验收前先读其 §4「实测环境事实」与 §5「已知问题」**）。更新状态时请同步调整文件名后缀，避免与实际进度不符。下一里程碑的文档沿用 `-TODO` 后缀新建。
 - 设计文档（`game-design.md`、`development-refinement.md`）**已提交入库**，且成文于任何 `src/` 代码存在之前。本文件通篇引用的章节编号（§2–§14）目前在这些文档中是稳定的；但若你改动了这些文档，请同步更新此处的交叉引用。
 
 ## 架构（整体图景）
