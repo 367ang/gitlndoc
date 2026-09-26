@@ -322,6 +322,53 @@ describe('executor —— 错误路径', () => {
     expect(result.error).toContain('尚不支持');
   });
 
+  // ── 空提交防御（M3 修复 M2 §5.1 的引擎保真缺陷，回归用例） ──────────────────
+  // 真 git 在「暂存区与 HEAD 一致」时拒绝提交（nothing to commit）；此前引擎
+  // 无条件创建空提交，1-4「没有新内容就没有新快照」的教学点可被绕过（实测）。
+
+  it('空仓库直接 commit 被拒绝（nothing to commit, unborn）', async () => {
+    await execute('git init', { dir });
+
+    const result = await execute('git commit -m "空提交"', { dir });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('空仓库里没有可提交的内容');
+
+    // 确实没有产生提交
+    const log = await execute('git log', { dir });
+    expect(log.ok).toBe(true);
+    expect(log.output).toEqual([]);
+  });
+
+  it('add + commit 后无新改动再 commit，被拒绝（nothing to commit）', async () => {
+    await execute('git init', { dir });
+    await writeRepoFile('/repo/a.txt', '内容\n');
+    await execute('git add .', { dir });
+    await execute('git commit -m "初始提交"', { dir });
+
+    // 工作区干净、暂存区与 HEAD 一致 —— 真 git 语义：nothing to commit, working tree clean
+    const result = await execute('git commit -m "重复提交"', { dir });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('没有可提交的内容');
+
+    const log = await execute('git log --oneline', { dir });
+    expect(log.output).toHaveLength(1); // 仍只有初始那一条
+  });
+
+  it('add 后立即重复 commit（未改工作区），第二次被拒绝', async () => {
+    await execute('git init', { dir });
+    await writeRepoFile('/repo/a.txt', '内容\n');
+    await execute('git add .', { dir });
+    const first = await execute('git commit -m "第一次"', { dir });
+    expect(first.ok).toBe(true);
+
+    // 不改文件直接再 add + commit：索引与 HEAD 无差异
+    await execute('git add .', { dir });
+    const second = await execute('git commit -m "第二次"', { dir });
+    expect(second.ok).toBe(false);
+    expect(second.error).toContain('没有可提交的内容');
+  });
+
+
   it('不支持的旗标给出 invalid-usage 报错', async () => {
     const init = await execute('git init --bare', { dir });
     expect(init.ok).toBe(false);

@@ -1,0 +1,69 @@
+/* 分步提示面板（§9.1 Hints）
+ * 颜色一律取自 tokens.css 的 --gtp-* 变量，不硬编码。 */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gtp-space-1);
+  padding: var(--gtp-space-2) var(--gtp-space-3);
+  background: var(--gtp-color-surface-raised);
+  border: 1px solid var(--gtp-color-border);
+  border-radius: var(--gtp-radius-md);
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gtp-space-2);
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--gtp-color-warning);
+  font-size: var(--gtp-font-size-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.toggle:hover {
+  color: var(--gtp-color-text);
+}
+
+.arrow {
+  flex-shrink: 0;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gtp-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--gtp-space-1) var(--gtp-space-2);
+  border-left: 2px solid var(--gtp-color-warning);
+  background: var(--gtp-color-surface);
+  border-radius: 0 var(--gtp-radius-sm) var(--gtp-radius-sm) 0;
+}
+
+/* 完整答案（末层）用警示边色区分 —— 看了就扣最多分 */
+.item[data-final='true'] {
+  border-left-color: var(--gtp-color-danger);
+}
+
+.level {
+  font-size: var(--gtp-font-size-xs);
+  color: var(--gtp-color-text-dim);
+}
+
+.text {
+  font-size: var(--gtp-font-size-sm);
+  color: var(--gtp-color-text);
+  overflow-wrap: anywhere;
+}

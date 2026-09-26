@@ -40,6 +40,13 @@ export interface SessionState {
    * `satisfied` 驱动 `level → levelComplete` 的过关判定，`results` 驱动 GoalPanel。
    */
   targetState: TargetState | null
+  /**
+   * 结算所需的会话侧信息（M3）。
+   * `hintsUsed`：本关累计查看的提示条数（Hints 面板每解锁一条记一次）；
+   * `firstAttempt`：本关是否首次尝试（重玩 / 重试后为 false）——
+   * 由 `startLevel()` 在写入关卡时判定「本次是否是本会话对该关的第一次」。
+   */
+  settlement: { hintsUsed: number; firstAttempt: boolean; hintCountedLevel: number }
 
   setLevel: (level: Level | null) => void
   /** 追加一条命令历史；自动补上递增 id（`cmd-<n>`）与时间戳 `ts` */
@@ -51,6 +58,14 @@ export interface SessionState {
   resetDraft: () => void
   /** 写入目标检测结果（由 `useTargetState` 调用） */
   setTargetState: (state: TargetState | null) => void
+  /**
+   * 记「玩家查看了第 level 层提示」（M3 提示扣分）。
+   * 按层级去重：StrictMode 重挂会重放「level 1 已解锁」的渲染，
+   * 只有 level 超过已计层级才 +1 —— 同层重复上报不重复扣分。
+   */
+  markHintUsed: (level: number) => void
+  /** 整体覆写结算信息（startLevel 在进关时复位用） */
+  setSettlement: (settlement: { hintsUsed: number; firstAttempt: boolean }) => void
   /** 退出关卡时清理会话（当前关卡、历史、输入、目标一并复位） */
   resetSession: () => void
 }
@@ -61,6 +76,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
   draft: EMPTY_DRAFT,
   nextEntryId: 1,
   targetState: null,
+  settlement: { hintsUsed: 0, firstAttempt: true, hintCountedLevel: 0 },
 
   // 换关时一并清掉上一关的目标判定结果，避免新关卡首帧闪出旧勾选
   setLevel: (level) => set({ level, targetState: null }),
@@ -82,11 +98,27 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
 
   setTargetState: (state) => set({ targetState: state }),
 
+  markHintUsed: (level) =>
+    set((state) => {
+      if (level <= state.settlement.hintCountedLevel) return state
+      return {
+        settlement: {
+          ...state.settlement,
+          hintsUsed: state.settlement.hintsUsed + 1,
+          hintCountedLevel: level,
+        },
+      }
+    }),
+
+  setSettlement: ({ hintsUsed, firstAttempt }) =>
+    set((state) => ({ settlement: { hintsUsed, firstAttempt, hintCountedLevel: 0 } })),
+
   resetSession: () =>
     set({
       level: null,
       history: [],
       draft: EMPTY_DRAFT,
       targetState: null,
+      settlement: { hintsUsed: 0, firstAttempt: true, hintCountedLevel: 0 },
     }),
 }))

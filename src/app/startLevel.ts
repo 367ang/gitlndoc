@@ -22,6 +22,7 @@
 import { getLevel } from '../levels/chapters'
 import { reset } from '../engine/sandbox'
 import { useSessionStore } from '../store/sessionStore'
+import { useProgressStore } from '../store/progressStore'
 import { useViewStore } from '../store/viewStore'
 
 /** `startLevel()` 的结果：失败时带一句面向玩家的中文说明 */
@@ -57,6 +58,12 @@ export async function startLevel(levelId: string): Promise<StartLevelResult> {
   session.clearHistory()
   // 复位上一关残留的拼接草稿（否则新关卡一进来就带着上一关拼了一半的命令）
   session.resetDraft()
+  // 结算信息复位（M3）：提示计数清零；firstAttempt 按进度库判定 ——
+  // 该关已有通关记录（重玩）或本会话内已进过（重试）都算「非首次」。
+  // 注：重启浏览器后 firstAttempt 会重新变 true（进度持久化属 M5），
+  // 届时「first-try 成就」的判定口径需随持久化一起复核。
+  const clearedBefore = useProgressStore.getState().levelRecords[level.id]?.cleared === true
+  session.setSettlement({ hintsUsed: 0, firstAttempt: !clearedBefore })
 
   // 3) 切视图
   useViewStore.getState().goLevel(level.id)

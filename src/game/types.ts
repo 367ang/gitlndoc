@@ -50,6 +50,9 @@ export interface ScoringParams {
   probeBonus: number // 只读探查命令加分（有上限）
 }
 
+/** probeBonus 的单关累计上限（次）。§7 只说「小额 + 上限」，数值待 M7 平衡调参 */
+export const PROBE_BONUS_MAX_EVENTS = 3
+
 /** 分步提示（按失败次数解锁，§9.1） */
 export interface HintStep {
   text: string // 提示正文
@@ -69,6 +72,8 @@ export interface Level {
   targets: TargetCondition[] // 达标条件（全部满足才过关）
   winScore: number // 过关所需最低得分
   scoring: ScoringParams // 计分参数
+  /** 参考解法的成功命令数（§7.3 optimalBonus 判据：与参考一致或更短） */
+  optimalMoves: number
   hints: HintStep[] // 分步提示（按失败次数解锁）
   timeoutMs?: number // 可选倒计时（默认不限时）
 }

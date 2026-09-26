@@ -18,7 +18,7 @@
 //    无需沙箱。
 
 import { useState } from 'react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import * as LightningFsNS from '@isomorphic-git/lightning-fs'
 import { configureFs, fsp, type FsIdb } from '../engine/fs'
@@ -39,7 +39,12 @@ import { GoalPanel } from '../ui/components/goalPanel/GoalPanel'
 import { ChapterScreen } from '../ui/components/chapter/ChapterScreen'
 import { LevelScreen } from '../ui/components/level/LevelScreen'
 import { useSessionStore } from '../store/sessionStore'
+import { useProgressStore } from '../store/progressStore'
 import { useViewStore } from '../store/viewStore'
+import { HintsPanel } from '../ui/components/level/HintsPanel'
+import { LevelComplete } from '../ui/components/level/LevelComplete'
+import { MenuScreen } from '../ui/components/menu/MenuScreen'
+import { getUnlockedHints } from '../game/validate/stepHints'
 import { CHAPTER_1_LEVELS } from '../levels/chapters/ch1'
 import type { TargetResult } from '../game/validate/targetState'
 import type { Level, TargetCondition } from '../game/types'
@@ -68,6 +73,8 @@ function resetSession(): void {
 }
 
 afterEach(() => {
+  // M3：进度库也是全局单例，防止用例间串味
+  useProgressStore.setState({ levelRecords: {}, achievements: [] })
   // testing-library 在 vitest 下不会自动清理（未开 globals 自动 cleanup 时），显式清理更稳
   cleanup()
   // 视图状态也是全局单例：章节页用例会写入 view：'chapter'，不复位会泄漏给后续用例
@@ -779,5 +786,167 @@ describe('components —— 导航出口', () => {
 
     expect(useViewStore.getState().view).toBe('menu')
     expect(useViewStore.getState().chapterId).toBeNull()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// M3：计分 / 星级 / 成就的 UI 接线
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('components —— HintsPanel（M3 分步提示与计数）', () => {
+  function makeHints() {
+    return [
+      { text: '方向提示：先想想档案库怎么建立。', unlockAfterFailures: 0 },
+      { text: '命令提示：git init 是起点。', unlockAfterFailures: 1 },
+      { text: '完整答案：git init → git add . → git commit -m "初始化"', unlockAfterFailures: 3 },
+    ]
+  }
+
+  it('0 次失败时只显示 unlockAfterFailures=0 的层级；未解锁条目不出现（不暗示刷提示）', () => {
+    const hints = getUnlockedHints(makeHints(), 0)
+    render(<HintsPanel hints={hints} defaultOpen onHintUsed={() => {}} />)
+
+    expect(screen.getByText(/方向提示/)).toBeTruthy()
+    expect(screen.queryByText(/命令提示/)).toBeNull()
+    expect(screen.queryByText(/完整答案/)).toBeNull()
+  })
+
+  it('失败达到阈值后对应层级解锁；每次新解锁恰好触发一次 onHintUsed', () => {
+    const onHintUsed = vi.fn()
+    const { rerender } = render(
+      <HintsPanel hints={getUnlockedHints(makeHints(), 0)} onHintUsed={onHintUsed} />,
+    )
+    // 默认收起：解锁但未查看不计分（「查看即计数」语义）
+    expect(onHintUsed).toHaveBeenCalledTimes(0)
+
+    // 失败 1 次 → 层级 2 解锁（面板仍收起）→ 仍不计
+    rerender(<HintsPanel hints={getUnlockedHints(makeHints(), 1)} onHintUsed={onHintUsed} />)
+    expect(onHintUsed).toHaveBeenCalledTimes(0)
+
+    // 玩家点击「提示」按钮展开 → 看到层级 1、2，一并计数（看过多少层记多少）
+    fireEvent.click(screen.getByRole('button', { name: /提示（已解锁 2 条/ }))
+    expect(screen.getByText(/命令提示/)).toBeTruthy()
+    expect(onHintUsed).toHaveBeenNthCalledWith(1, 1)
+    expect(onHintUsed).toHaveBeenNthCalledWith(2, 2)
+
+    // 同层级反复渲染（version 刷新）不重复计数
+    rerender(<HintsPanel hints={getUnlockedHints(makeHints(), 1)} onHintUsed={onHintUsed} />)
+    expect(onHintUsed).toHaveBeenCalledTimes(2)
+
+    // 失败 3 次 → 层级 3（完整答案）解锁，面板已展开 → 记第 3 条
+    rerender(<HintsPanel hints={getUnlockedHints(makeHints(), 3)} onHintUsed={onHintUsed} />)
+    expect(screen.getByText(/完整答案/)).toBeTruthy()
+    expect(onHintUsed).toHaveBeenNthCalledWith(3, 3)
+  })
+
+  it('尚无解锁提示时不渲染面板（无「提示」入口空转，也不暴露未解锁数量）', () => {
+    render(<HintsPanel hints={getUnlockedHints([], 5)} onHintUsed={() => {}} />)
+    expect(screen.queryByTestId('hints-panel')).toBeNull()
+  })
+})
+
+describe('components —— LevelComplete（M3 结算）', () => {
+  beforeEach(() => {
+    useProgressStore.setState({ levelRecords: {}, achievements: [] })
+  })
+
+  function settleLevel1() {
+    // 造一个「干净过关」的会话：2 条命令全成功、无提示、首次尝试
+    const level = CHAPTER_1_LEVELS[0]!
+    useSessionStore.setState({
+      level,
+      history: [
+        { id: 'a', input: 'git add .', tokens: ['git', 'add', '.'], ok: true, output: [], ts: 1, undoable: false },
+        { id: 'b', input: 'git commit -m "初始化"', tokens: ['git', 'commit', '-m', '初始化'], ok: true, output: [], ts: 2, undoable: false },
+      ],
+      draft: EMPTY_DRAFT,
+      targetState: {
+        satisfied: true,
+        remaining: 0,
+        results: level.targets.map((target) => ({
+          target,
+          ok: true,
+          implemented: true,
+          detail: '已达成（测试桩）',
+        })),
+      },
+      settlement: { hintsUsed: 0, firstAttempt: true, hintCountedLevel: 0 },
+    })
+    useViewStore.setState({ view: 'levelComplete', chapterId: null, levelId: level.id })
+    return level
+  }
+
+  it('结算页渲染得分与星级，并把记录写入 progressStore（3 星：满分路径）', async () => {
+    const level = settleLevel1()
+    render(<LevelComplete />)
+
+    // 100 + 20（最优 2≤3）+ 25（一次通过）= 145 ≥ 95（0.95·baseScore）→ 3 星
+    await waitFor(() => expect(useProgressStore.getState().levelRecords[level.id]).toBeTruthy())
+    const record = useProgressStore.getState().levelRecords[level.id]!
+    expect(record.cleared).toBe(true)
+    expect(record.score).toBe(145)
+    expect(record.stars).toBe(3)
+    // UI 上可见最终得分
+    expect(screen.getByTestId('final-score').textContent).toContain('145')
+  })
+
+  it('结算触发成就解锁（无提示 + 首次尝试 + 首次通关 → 4 个）并展示「新解锁」', async () => {
+    settleLevel1()
+    render(<LevelComplete />)
+
+    await waitFor(() => {
+      // no-undo / first-try / no-hint / first-clear —— 完美篇章需全章通关，不在内
+      expect(useProgressStore.getState().achievements.sort()).toEqual(
+        ['first-clear', 'first-try', 'no-hint', 'no-undo'],
+      )
+    })
+    expect(screen.getByTestId('new-achievements')).toBeTruthy()
+  })
+
+  it('重复结算不重复写库（StrictMode 双跑回归锁）：落库值稳定', async () => {
+    const level = settleLevel1()
+    // 预置一条旧记录（模拟重玩后再次过关的覆盖路径）
+    useProgressStore.setState({
+      levelRecords: { [level.id]: { score: 50, stars: 1, cleared: true } },
+      achievements: ['no-undo', 'first-try', 'no-hint', 'first-clear'],
+    })
+    render(<LevelComplete />)
+
+    await waitFor(() => expect(useProgressStore.getState().levelRecords[level.id]!.score).toBe(145))
+    // 已解锁的成就不重复出现在「新解锁」列表
+    expect(screen.queryByTestId('new-achievements')).toBeNull()
+  })
+})
+
+describe('components —— MenuScreen（M3 汇总与成就入口）', () => {
+  it('汇总条显示总得分 / 通关数 / 星级；成就面板默认收起', () => {
+    useProgressStore.setState({
+      levelRecords: {
+        'ch1-1': { score: 145, stars: 3, cleared: true },
+        'ch1-2': { score: 70, stars: 1, cleared: true },
+      },
+      achievements: ['no-undo'],
+    })
+    render(<MenuScreen />)
+
+    expect(screen.getByTestId('total-score').textContent).toBe('215') // 145 + 70
+    expect(screen.getByTestId('achievement-toggle').textContent).toContain('1/5')
+    expect(screen.queryByTestId('achievement-list')).toBeNull()
+  })
+
+  it('点击成就按钮展开列表，已解锁与未解锁状态可区分', () => {
+    useProgressStore.setState({
+      levelRecords: {},
+      achievements: ['no-undo'],
+    })
+    render(<MenuScreen />)
+
+    fireEvent.click(screen.getByTestId('achievement-toggle'))
+    const list = screen.getByTestId('achievement-list')
+    expect(list).toBeTruthy()
+    const items = list.querySelectorAll('li')
+    expect(items).toHaveLength(5)
+    expect(items[0]!.dataset.unlocked).toBe('true')
+    expect(items[1]!.dataset.unlocked).toBe('false')
   })
 })

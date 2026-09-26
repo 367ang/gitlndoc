@@ -37,6 +37,9 @@
  * - ⚠️ **不要用 `.git` 的存在性作目标**：`sandbox.reset()` 内部**总是**会调
  *   `gitApi.init()`，故进入任何关卡时 `.git` 都已存在，这种目标会「开局即达标」。
  *   1-1 最初正是这样写的，实测后改为 `commitCount` + `workdirClean`（见其定义处注释）。
+ * - `optimalMoves`（M3 引入）：取参考解法的**成功命令数**（§7.3 optimalBonus 的判据
+ *   为「与参考一致或更短」）。失败重试不计入 —— 只数最终走通的那条路径。
+ *   各关参考解法与步数核定见各关卡定义处注释。
  */
 
 import type { Level } from '../../game/types';
@@ -96,6 +99,8 @@ const LEVEL_1_1: Level = {
   ],
   winScore: 60,
   scoring: { ...SCORING_PLACEHOLDER },
+  // 参考解法：git init → git add . → git commit -m "初始化时间线"（3 步）
+  optimalMoves: 3,
   hints: [
     {
       text: '档案库（本地仓库）需要被显式建立，它不是自动出现的。',
@@ -151,6 +156,8 @@ const LEVEL_1_2: Level = {
   ],
   winScore: 70,
   scoring: { ...SCORING_PLACEHOLDER },
+  // 参考解法：git add . → git commit -m "第一次快照"（2 步）
+  optimalMoves: 2,
   hints: [
     {
       text: '一份内容要先被「选中」，才有资格进入档案库，这一步和归档本身是分开的。',
@@ -205,6 +212,8 @@ const LEVEL_1_3: Level = {
   ],
   winScore: 80,
   scoring: { ...SCORING_PLACEHOLDER },
+  // 参考解法：git add . → git commit -m "归档三态笔记"（2 步）
+  optimalMoves: 2,
   hints: [
     {
       text: '内容目前停在第一态（工作区）。它需要被明确地「选中」，才会进入第二态。',
@@ -267,6 +276,8 @@ const LEVEL_1_4: Level = {
   ],
   winScore: 90,
   scoring: { ...SCORING_PLACEHOLDER },
+  // 参考解法：git add . → commit 第一环 → 改文件 → git add . → commit 第二环（5 步）
+  optimalMoves: 5,
   hints: [
     {
       text: '一个孤立的时间点构不成历史。要让链条出现，至少需要两次归档。',

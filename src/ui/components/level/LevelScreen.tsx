@@ -2,22 +2,24 @@
 //
 // M1 时本文件临时放在 `src/app/`；M2 起按 §3 的目录规划迁移到 `src/ui/components/level/`。
 //
-// 布局严格对齐 §9.1（M2 为简化版，但**结构**一致，便于 M4 增补 GitGraph/BranchPanel/Hints）：
-//   ┌ 顶部栏：章节/关卡名 · 目标摘要 · 得分 · 星级 · 暂停 ────────────────┐
+// 布局严格对齐 §9.1（M3 增补得分与 Hints，GitGraph/BranchPanel 仍待 M4）：
+//   ┌ 顶部栏：章节/关卡名 · 目标摘要 · 得分 · 星级 ────────────────────────┐
 //   ├ GoalPanel（目标与检测）      │ FileTree（工作区状态树）             │
-//   │ Terminal（命令输入 + 历史）  │ GitGraph 提交图（M2 用 CommitPanel） │
+//   │ Terminal（命令输入 + 历史）  │ CommitPanel 提交图（GitGraph 属 M4） │
+//   │ HintsPanel（M3 分步提示）    │                                      │
 //   └──────────────────────────────┴──────────────────────────────────────┘
-// 得分 / 星级 / 暂停按钮在 M2 **不实现**（计分与星级属 M3，见 M2-tasks-TODO
-// 「已确认的决策」第 2 条）；此处只保留它们在 §9.1 中的位置标注，避免 M3 重新排版。
 //
 // ⚠️ 本组件的定位是**容器**：只负责组装与刷新编排，不含业务逻辑 ——
 // 命令执行只发生在 Terminal / CommandBuilder（经 executor），
-// 目标判定只在 `game/validate/targetState`（经 `useTargetState`）。
+// 目标判定只在 `game/validate/targetState`（经 `useTargetState`），
+// 得分计算只在 `game/scoring/score`（本页只是**展示**当前推算分）。
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { executeToEntry } from '../../../game/command/executor'
 import { fragmentsForLevel } from '../../../game/command/fragments'
 import { stillMissingHint } from '../../../game/validate/stillMissingHint'
+import { getUnlockedHints } from '../../../game/validate/stepHints'
+import { evaluateScore } from '../../../game/scoring/score'
 import { getChapterMeta } from '../../../levels/chapters'
 import { useSessionStore } from '../../../store/sessionStore'
 import { useViewStore } from '../../../store/viewStore'
@@ -25,6 +27,7 @@ import { CommandHistory } from '../history/CommandHistory'
 import { CommitPanel } from '../gitGraph/CommitPanel'
 import { FileTree } from '../fileTree/FileTree'
 import { GoalPanel } from '../goalPanel/GoalPanel'
+import { HintsPanel } from './HintsPanel'
 import { CommandBuilder } from '../terminal/CommandBuilder'
 import { Terminal } from '../terminal/Terminal'
 import { useFileTree } from '../fileTree/useFileTree'
@@ -39,13 +42,14 @@ export function LevelScreen() {
   const setDraft = useSessionStore((state) => state.setDraft)
   const resetDraft = useSessionStore((state) => state.resetDraft)
   const appendEntry = useSessionStore((state) => state.appendEntry)
+  const markHintUsed = useSessionStore((state) => state.markHintUsed)
   const goMenu = useViewStore((state) => state.goMenu)
   const goChapter = useViewStore((state) => state.goChapter)
   const goLevelComplete = useViewStore((state) => state.goLevelComplete)
 
   // 「流水号」：每条命令执行后自增，驱动文件树、提交历史与目标检测重新读取（§9.1 的刷新触发）
   const [version, setVersion] = useState(0)
-  // 失败次数（执行失败 ≠ 目标未达成）：供 GoalPanel 逐级给出更具体的抽象引导
+  // 失败次数（执行失败 ≠ 目标未达成）：供 GoalPanel 抽象引导与 stepHints 解锁提示
   const [failures, setFailures] = useState(0)
 
   const tree = useFileTree(version)
@@ -60,6 +64,23 @@ export function LevelScreen() {
     isMenuMode,
   ])
 
+  // 分步提示状态：按失败次数派生（纯函数，每渲染重算代价可忽略）
+  const hints = useMemo(
+    () => getUnlockedHints(level?.hints ?? [], failures),
+    [level, failures],
+  )
+
+  // 实时得分（M3）：随历史与目标判定变化重算。这是**推算值** —— 正式结算
+  // （含 firstAttempt 判定与落库）发生在 LevelComplete，本页只供玩家感知趋势。
+  const liveScore = useMemo(() => {
+    if (level === null || targets.state === null) return null
+    return evaluateScore(level, history, {
+      hintsUsed: useSessionStore.getState().settlement.hintsUsed,
+      targetsMet: targets.state.satisfied,
+      firstAttempt: useSessionStore.getState().settlement.firstAttempt,
+    })
+  }, [level, history, targets.state])
+
   // 换关时复位失败计数（否则新关卡一进来就带着上一关的提示级别）
   useEffect(() => {
     setFailures(0)
@@ -70,7 +91,7 @@ export function LevelScreen() {
     if (!ok) setFailures((value) => value + 1)
   }, [])
 
-  // 过关判定：全部 targets 满足 → 切 levelComplete（§9.1、M2 只做判定不做计分）
+  // 过关判定：全部 targets 满足 → 切 levelComplete（§9.1；结算在 LevelComplete 做）
   useEffect(() => {
     if (targets.state?.satisfied === true) goLevelComplete()
   }, [targets.state, goLevelComplete])
@@ -121,13 +142,15 @@ export function LevelScreen() {
               {chapterTitle} · {level.id}
             </span>
           )}
-          {/*
-            §9.1 的「得分 / 星级 / 暂停」位：M2 明确不做（计分与星级属 M3）。
-            此处仅以占位标注保留位置，不渲染任何假的分数。
-          */}
-          <span className={styles.pending} title="得分与星级属 M3">
-            得分 · 星级（M3）
-          </span>
+          {/* §9.1 的「得分 / 星级」位：M3 起展示实时推算分（正式结算在 LevelComplete）。
+              自由沙箱（level === null）无计分对象，维持占位说明。 */}
+          {level !== null && liveScore !== null ? (
+            <span className={styles.scoreBadge} data-testid="live-score" title="当前推算得分（结算以过关页为准）">
+              {liveScore.score} 分 · {'★'.repeat(liveScore.stars) || '☆'}
+            </span>
+          ) : (
+            <span className={styles.pending}>自由演练 · 不计分</span>
+          )}
           {/*
             两级出口：返回章节（chN 关卡列表）与返回菜单。
             ⚠️ 浏览器后退键在本应用里会直接离开页面（刻意不用 react-router，§1），
@@ -158,6 +181,9 @@ export function LevelScreen() {
             checking={targets.checking}
             missingHint={stillMissingHint(failures)}
           />
+
+          {/* M3 分步提示：解锁一条记一次提示扣分（markHintUsed 内部单调递增） */}
+          <HintsPanel hints={hints} onHintUsed={markHintUsed} />
 
           <div className={styles.terminalBlock}>
             <h2 className={styles.panelTitle}>终端</h2>

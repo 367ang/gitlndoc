@@ -207,6 +207,30 @@ describe('关卡数据 —— schema 校验', () => {
     expect(validateLevel({ ...good, scoring: { baseScore: 1 } }).ok).toBe(false)
     // hints 的 unlockAfterFailures 为负
     expect(validateLevel({ ...good, hints: [{ text: 'x', unlockAfterFailures: -1 }] }).ok).toBe(false)
+    // optimalMoves（M3）：0 / 负数 / 非整数 / 缺失都拦下
+    expect(validateLevel({ ...good, optimalMoves: 0 }).ok).toBe(false)
+    expect(validateLevel({ ...good, optimalMoves: -2 }).ok).toBe(false)
+    expect(validateLevel({ ...good, optimalMoves: 2.5 }).ok).toBe(false)
+    expect(validateLevel({ ...good, optimalMoves: undefined }).ok).toBe(false)
+  })
+
+  it('optimalMoves（M3）：4 关齐备且为正整数（optimalBonus 的判据基础）', () => {
+    for (const level of CHAPTER_1_LEVELS) {
+      expect(Number.isInteger(level.optimalMoves)).toBe(true)
+      expect(level.optimalMoves).toBeGreaterThanOrEqual(1)
+    }
+    // 参考解法步数与 ch1.ts 注释里核定的参考解法一致：
+    // 1-1 init→add→commit 3 步；1-2 add→commit 2 步；1-3 add→commit 2 步；
+    // 1-4 add→commit→改文件→add→commit 5 步
+    const expected: Record<string, number> = {
+      'ch1-1': 3,
+      'ch1-2': 2,
+      'ch1-3': 2,
+      'ch1-4': 5,
+    }
+    for (const level of CHAPTER_1_LEVELS) {
+      expect(level.optimalMoves).toBe(expected[level.id])
+    }
   })
 
   it('schema 拒绝尚未落地的 init 字段（与 sandbox.reset 的 fail-fast 同一口径）', () => {

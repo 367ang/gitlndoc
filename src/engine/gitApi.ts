@@ -338,7 +338,42 @@ export async function commit(
   options: RepoOptions = {},
 ): Promise<GitResult<string>> {
   const text = message.trim();
-  return runGit(`git commit -m "${text}"`, () =>
+  const command = `git commit -m "${text}"`;
+
+  // --- 空提交防御（M3 修复 M2 §5.1 的保真缺陷） --------------------------------
+  // 真 git 在「暂存区与 HEAD 完全一致」时拒绝提交（exit 1 "nothing to commit"）。
+  // isomorphic-git 的 `git.commit` 无条件创建提交，此前本引擎允许真 git 会拒绝的
+  // 空提交 —— 1-4「历史之链」的「没有新内容就没有新快照」教学点可被绕过（实测）。
+  //
+  // 判据复用 status() 的既有推导（staged 来自 statusMatrix + 内容哈希比对，
+  // 修过等长改写误报等两个真实缺陷，见 status() 注释），不自行重算状态：
+  //   - 有 staged 条目（索引相对 HEAD 有变化，或初生仓库有新暂存）→ 可提交；
+  //   - 初生仓库（无 HEAD）：unborn 为 true，只要有 staged 条目即可提交；
+  //     索引也为空则真 git 会报「nothing to commit (unborn branch)」，同样拒绝。
+  const statusResult = await status(options);
+  if (statusResult.ok && statusResult.value.staged.length === 0) {
+    const unborn = statusResult.value.unborn;
+    return {
+      ok: false,
+      error: new GitCommandError(
+        'NoCommitError',
+        unborn
+          ? '空仓库里没有可提交的内容 —— 先用 git add 把改动送入暂存区。'
+          : '没有可提交的内容（暂存区与最近一次快照一致）—— 先用 git add 暂存新的改动。',
+        'nothing to commit, working tree clean',
+        {
+          command,
+          hint: '先用 git add <文件>（或 git add .）把要归档的内容送入暂存区，再提交。',
+        },
+      ),
+    };
+  }
+  if (!statusResult.ok) {
+    // status 本身失败（如仓库未 init）：按原样向调用方报错，不伪装成「可提交」
+    return { ok: false, error: statusResult.error };
+  }
+
+  return runGit(command, () =>
     git.commit({
       fs: getFs(),
       dir: resolveDir(options),

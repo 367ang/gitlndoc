@@ -298,6 +298,15 @@ export function validateLevel(input: unknown): ValidationResult {
   if (!isFiniteNumber(raw.winScore) || raw.winScore <= 0) {
     collector.add('winScore', '必须是大于 0 的数值。');
   }
+  // optimalMoves：§7.3 optimalBonus 的判据（命令数与参考解法一致或更短才给分）。
+  // 必须是正整数：0 或负数会让「最优序列」奖励失去意义，非整数则无从比较。
+  if (
+    !isFiniteNumber(raw.optimalMoves) ||
+    !Number.isInteger(raw.optimalMoves) ||
+    raw.optimalMoves < 1
+  ) {
+    collector.add('optimalMoves', '必须是大于 0 的整数（参考解法的成功命令数）。');
+  }
   validateScoring(raw.scoring, collector);
   validateTimeout(raw.timeoutMs, collector);
 
