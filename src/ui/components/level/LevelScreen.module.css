@@ -1,5 +1,11 @@
-/* 关卡主界面容器（§9.1 关卡主界面布局的 M1 极简版）
- * 颜色一律取自 tokens.css 的 --gtp-* 变量，不硬编码。 */
+/* 关卡主界面容器（§9.1 关卡主界面布局）
+ * 颜色一律取自 tokens.css 的 --gtp-* 变量，不硬编码。
+ *
+ * 结构对齐 §9.1：
+ *   顶部栏（章节/关卡名 · 目标摘要 · 得分 · 星级 · 暂停）
+ *   ├ 左列：GoalPanel 上 / Terminal 下
+ *   └ 右列：FileTree 上 / GitGraph（M2 = CommitPanel）下
+ * M4 增补 BranchPanel / Hints 时，它们挂进右列即可，无需重排本文件。 */
 
 .screen {
   display: flex;
@@ -9,6 +15,7 @@
   padding: var(--gtp-space-4);
 }
 
+/* ── 顶部栏 ── */
 .header {
   display: flex;
   align-items: flex-start;
@@ -25,6 +32,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--gtp-space-1);
+  min-width: 0;
 }
 
 .title {
@@ -36,18 +44,52 @@
 .objective {
   font-size: var(--gtp-font-size-sm);
   color: var(--gtp-color-text-muted);
+  overflow-wrap: anywhere;
 }
 
-.mode {
+.status {
+  display: flex;
+  align-items: center;
   flex-shrink: 0;
+  gap: var(--gtp-space-3);
+}
+
+.chapter {
   padding: var(--gtp-space-1) var(--gtp-space-3);
   border: 1px solid var(--gtp-color-border-strong);
   border-radius: var(--gtp-radius-pill);
   color: var(--gtp-color-nebula-soft);
   font-size: var(--gtp-font-size-xs);
   letter-spacing: 0.06em;
+  white-space: nowrap;
 }
 
+/* §9.1 的「得分 · 星级」位。M2 明确不做计分（属 M3），此处仅保留位置标注，
+ * 不渲染任何数字 —— 假的分数比空位更有害。 */
+.pending {
+  color: var(--gtp-color-text-dim);
+  font-size: var(--gtp-font-size-xs);
+  white-space: nowrap;
+}
+
+.quit {
+  padding: var(--gtp-space-1) var(--gtp-space-3);
+  background: transparent;
+  border: 1px solid var(--gtp-color-border-strong);
+  border-radius: var(--gtp-radius-pill);
+  color: var(--gtp-color-text-muted);
+  font-size: var(--gtp-font-size-xs);
+  transition:
+    border-color var(--gtp-duration-fast) var(--gtp-ease-out),
+    color var(--gtp-duration-fast) var(--gtp-ease-out);
+}
+
+.quit:hover {
+  border-color: var(--gtp-color-pulse);
+  color: var(--gtp-color-text);
+}
+
+/* ── 左右两列 ── */
 .columns {
   display: grid;
   grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
@@ -56,7 +98,16 @@
   min-height: 0;
 }
 
+/* 左列：GoalPanel 上 / Terminal 下（§9.1） */
 .console {
+  display: grid;
+  /* GoalPanel 自适应内容（目标条数每关不同），终端吃掉剩余高度 */
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: var(--gtp-space-4);
+  min-height: 0;
+}
+
+.terminalBlock {
   display: flex;
   flex-direction: column;
   gap: var(--gtp-space-3);
@@ -76,6 +127,7 @@
   text-transform: uppercase;
 }
 
+/* 右列：FileTree 上 / 提交图（M2 的 GitGraph 替代）下 */
 .side {
   display: grid;
   grid-template-rows: minmax(0, 1.4fr) minmax(0, 1fr);
@@ -83,7 +135,7 @@
   min-height: 0;
 }
 
-/* 窄屏（M1 只保证桌面可用，此处避免布局崩坏） */
+/* 窄屏（M2 只保证桌面可用，此处避免布局崩坏） */
 @media (max-width: 900px) {
   .columns {
     grid-template-columns: minmax(0, 1fr);

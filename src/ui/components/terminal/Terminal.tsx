@@ -9,14 +9,22 @@ import { executeToEntry } from '../../../game/command/executor'
 import { useSessionStore } from '../../../store/sessionStore'
 import styles from './Terminal.module.css'
 
+// ⚠️ 输入行状态刻意用**组件内 useState**，而不是 sessionStore：
+// 本组件只服务 `inputMode === 'free'` 的关卡（第 5 章起），与拼接模式的
+// `sessionStore.draft` 是两套不同的输入模型。把二者塞进同一字段只会让
+// 「切视图不丢输入」这个诉求在两种模式间互相污染；而自由输入框的内容
+// 本来就该随组件卸载而丢弃。
+
 export interface TerminalProps {
-  /** 每条命令执行完毕后回调（LevelScreen 借此自增「流水号」以刷新文件树） */
-  onExecuted: () => void
+  /**
+   * 每条命令执行完毕后的回调（LevelScreen 借此自增「流水号」以刷新文件树与目标面板）。
+   * @param ok 该命令是否执行成功 —— 失败要与「目标未达成」区分开，供分步提示计数。
+   */
+  onExecuted: (ok: boolean) => void
 }
 
 export function Terminal({ onExecuted }: TerminalProps) {
-  const input = useSessionStore((state) => state.input)
-  const setInput = useSessionStore((state) => state.setInput)
+  const [input, setInput] = useState('')
   const appendEntry = useSessionStore((state) => state.appendEntry)
   const history = useSessionStore((state) => state.history)
 
@@ -40,8 +48,10 @@ export function Terminal({ onExecuted }: TerminalProps) {
     setCursor(null)
     draft.current = ''
 
+    let ok = false
     try {
       const entry = await executeToEntry(command)
+      ok = entry.ok
       appendEntry(entry)
     } catch (error) {
       // 执行层的未捕获 rejection 也归一为一条历史记录，玩家不会「按了回车却什么都没发生」
@@ -56,7 +66,7 @@ export function Terminal({ onExecuted }: TerminalProps) {
       console.error('[Terminal] 命令执行抛出异常', error)
     } finally {
       setBusy(false)
-      onExecuted()
+      onExecuted(ok)
       inputRef.current?.focus()
     }
   }

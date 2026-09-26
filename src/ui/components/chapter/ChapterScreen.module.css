@@ -1,0 +1,157 @@
+/* 章节介绍页（§5 `chapter` 视图）
+ * 颜色一律取自 tokens.css 的 --gtp-* 变量，不硬编码。 */
+
+.screen {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gtp-space-4);
+  height: 100%;
+  overflow: auto;
+  padding: var(--gtp-space-6) var(--gtp-space-6);
+}
+
+.head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gtp-space-2);
+}
+
+/* 页头首行：返回按钮在左、章节标记紧随其后（左上角出口，符合「返回上一层」的直觉） */
+.headTop {
+  display: flex;
+  align-items: center;
+  gap: var(--gtp-space-3);
+}
+
+/* 返回按钮。视觉与 LevelScreen 的「返回菜单」保持一致（描边胶囊、hover 转脉冲蓝），
+   仅加了一个 ← 箭头以强化「返回上一层」的语义。 */
+.back {
+  flex-shrink: 0;
+  padding: var(--gtp-space-1) var(--gtp-space-3);
+  background: transparent;
+  border: 1px solid var(--gtp-color-border-strong);
+  border-radius: var(--gtp-radius-pill);
+  color: var(--gtp-color-text-muted);
+  font-size: var(--gtp-font-size-xs);
+  transition:
+    border-color var(--gtp-duration-fast) var(--gtp-ease-out),
+    color var(--gtp-duration-fast) var(--gtp-ease-out);
+}
+
+.back:hover {
+  border-color: var(--gtp-color-pulse);
+  color: var(--gtp-color-text);
+}
+
+.kicker {
+  align-self: flex-start;
+  margin: 0;
+  padding: var(--gtp-space-1) var(--gtp-space-3);
+  border: 1px solid var(--gtp-color-border-strong);
+  border-radius: var(--gtp-radius-pill);
+  color: var(--gtp-color-nebula-soft);
+  font-size: var(--gtp-font-size-xs);
+  letter-spacing: 0.1em;
+}
+
+.title {
+  font-size: var(--gtp-font-size-2xl);
+  color: var(--gtp-color-text);
+}
+
+.desc {
+  margin: 0;
+  max-width: 48rem;
+  color: var(--gtp-color-text-muted);
+}
+
+.error {
+  margin: 0;
+  padding: var(--gtp-space-2) var(--gtp-space-3);
+  background: var(--gtp-color-surface-raised);
+  border: 1px solid var(--gtp-color-danger);
+  border-radius: var(--gtp-radius-md);
+  color: var(--gtp-color-danger);
+  font-size: var(--gtp-font-size-sm);
+}
+
+.levels {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gtp-space-3);
+  max-width: 60rem;
+}
+
+.level {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gtp-space-4);
+  padding: var(--gtp-space-3) var(--gtp-space-4);
+  background: var(--gtp-color-surface);
+  border: 1px solid var(--gtp-color-border);
+  border-radius: var(--gtp-radius-lg);
+  box-shadow: var(--gtp-shadow-sm);
+}
+
+.levelText {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gtp-space-1);
+  min-width: 0;
+}
+
+.levelTitle {
+  display: flex;
+  align-items: baseline;
+  gap: var(--gtp-space-2);
+  font-size: var(--gtp-font-size-md);
+  font-weight: 600;
+  color: var(--gtp-color-text);
+}
+
+.levelId {
+  font-family: var(--gtp-font-mono);
+  font-size: var(--gtp-font-size-xs);
+  color: var(--gtp-color-branch-teal);
+}
+
+.objective {
+  margin: 0;
+  font-size: var(--gtp-font-size-sm);
+  color: var(--gtp-color-text-muted);
+}
+
+.meta {
+  margin: 0;
+  font-size: var(--gtp-font-size-xs);
+  color: var(--gtp-color-text-dim);
+}
+
+.start {
+  flex-shrink: 0;
+  padding: var(--gtp-space-2) var(--gtp-space-5);
+  background: var(--gtp-color-nebula-deep);
+  border: 1px solid var(--gtp-color-nebula);
+  border-radius: var(--gtp-radius-pill);
+  color: var(--gtp-color-text);
+  font-size: var(--gtp-font-size-sm);
+  transition: background var(--gtp-duration-fast) var(--gtp-ease-out);
+}
+
+.start:hover:not(:disabled) {
+  background: var(--gtp-color-nebula);
+  box-shadow: var(--gtp-shadow-glow-nebula);
+}
+
+.start:disabled {
+  background: transparent;
+  border-color: var(--gtp-color-border);
+  color: var(--gtp-color-text-dim);
+  cursor: not-allowed;
+}
+
+.empty {
+  color: var(--gtp-color-text-dim);
+  font-size: var(--gtp-font-size-sm);
+}
