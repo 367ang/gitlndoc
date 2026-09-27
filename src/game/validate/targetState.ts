@@ -14,14 +14,19 @@
  *      **内容哈希比对** 后才与真 git 对齐。
  * 因此本模块只做「读取 gitApi 结果 → 判定语义」，不重复实现状态推导。
  *
- * ⚠️ 实现进度：M2 只实现第一章用到的 5 种 `TargetCondition`
- * （`file` / `commitCount` / `commitMessage` / `commitExists` / `workdirClean`）。
- * 其余 6 种（`branch` / `headBranch` / `tag` / `merged` / `logOrder` / `remote`）
+ * ⚠️ 实现进度：M2 实现第一章用到的 5 种 `TargetCondition`
+ * （`file` / `commitCount` / `commitMessage` / `commitExists` / `workdirClean`）；
+ * M4 增补第 2–3 章需要的 4 种（`branch` / `headBranch` / `merged` / `logOrder`）。
+ * 其余 2 种（`tag` / `remote`）属 M5/M6，
  * **明确返回「尚未实现」且判定为未达成** —— 绝不静默当作通过（§14 禁止伪造）。
  */
 
 import {
+  isDescendent,
+  listBranches,
   log as gitLog,
+  logWithRef,
+  resolveRef as gitResolveRef,
   status as gitStatus,
   type CommitEntry,
   type RepoOptions,
@@ -144,6 +149,35 @@ function isWorkdirClean(status: StatusSummary): boolean {
   return status.staged.length === 0 && status.unstaged.length === 0 && status.untracked.length === 0;
 }
 
+/**
+ * 解析若干分支头的 commit oid（`merged` 判定用）。
+ * 分支不存在或为初生分支时，对应位置返回 null。
+ */
+async function resolveBranchHeads(
+  options: RepoOptions,
+  names: string[],
+): Promise<[string | null, string | null]> {
+  const heads = await Promise.all(
+    names.map(async (name): Promise<string | null> => {
+      const result = await gitResolveRef(name, options);
+      return result.ok ? result.value : null;
+    }),
+  );
+  return [heads[0] ?? null, heads[1] ?? null];
+}
+
+/**
+ * 取某分支的提交信息列表（新→旧）；分支不存在返回 null。
+ * `gitApi.log()` 只读当前分支，分支头经 `resolveRef` 换算后用 `ref` 参数直达。
+ */
+async function branchLogOf(options: RepoOptions, branch: string): Promise<string[] | null> {
+  const head = await gitResolveRef(branch, options);
+  if (!head.ok) return null;
+  const result = await logWithRef(head.value, options);
+  if (!result.ok) return null;
+  return result.value.map((commit) => commit.message);
+}
+
 /** 把「还差什么」说得具体些，但不给命令：优先点名文件，其次给数量 */
 function describePendingChanges(status: StatusSummary): string {
   const pending = [...status.staged, ...status.unstaged, ...status.untracked];
@@ -180,10 +214,13 @@ function describeCommitCount(
  *
  * @param target  目标条件（§4.3 的判别联合）
  * @param context 由 `readTargetContext()` 采集的仓库快照
+ * @param options 仓库位置（`branch` / `merged` / `logOrder` 需要额外读分支信息，
+ *                与 context 采集时的 options 保持一致即可；测试注入 dir 时两者同步传入）
  */
 export async function evaluateTarget(
   target: TargetCondition,
   context: TargetContext,
+  options: RepoOptions = {},
 ): Promise<TargetResult> {
   switch (target.type) {
     // --- file：文件（或目录）存在 / 工作区内容匹配 ---
@@ -315,18 +352,145 @@ export async function evaluateTarget(
       };
     }
 
-    // --- 以下 6 种属 M4/M5，明确报「尚未实现」，不静默通过（§14） ---
-    case 'branch':
-    case 'headBranch':
+    // --- branch：分支存在（M4，第三章） ---
+    case 'branch': {
+      const branches = await listBranches(options);
+      if (!branches.ok) {
+        return { target, ok: false, implemented: true, detail: STATUS_UNAVAILABLE };
+      }
+      const exists = branches.value.some((entry) => entry.name === target.name);
+      if (target.exists) {
+        return {
+          target,
+          ok: exists,
+          implemented: true,
+          detail: exists
+            ? `分支「${target.name}」已存在。`
+            : `还没有名为「${target.name}」的分支。`,
+        };
+      }
+      return {
+        target,
+        ok: !exists,
+        implemented: true,
+        detail: exists
+          ? `分支「${target.name}」仍存在，应当被移除。`
+          : `分支「${target.name}」已不存在。`,
+      };
+    }
+
+    // --- headBranch：当前检出的分支（M4，第三章） ---
+    case 'headBranch': {
+      if (!context.status) {
+        return { target, ok: false, implemented: true, detail: STATUS_UNAVAILABLE };
+      }
+      const ok = context.status.branch === target.name;
+      return {
+        target,
+        ok,
+        implemented: true,
+        detail: ok
+          ? `当前正处于分支「${target.name}」。`
+          : `当前在分支「${context.status.branch}」，还没切换到「${target.name}」。`,
+      };
+    }
+
+    // --- merged：分支已并入目标分支（M4，第三章） ---
+    case 'merged': {
+      // 判据：into 的头是 branch 头的**后代**（即 branch 头可达 into 头的历史）。
+      // 等价于真 git 的 `git merge-base --is-ancestor <branch> <into>`。
+      // ⚠️ 探针实测（M4）：isomorphic-git 的 `isDescendent(oid, ancestor)` 语义为
+      // 「oid 是 ancestor 的后代」，故参数序为 (into头, branch头)；同为同一提交时
+      // 库恒返回 false（oid === ancestor 短路），需先判等 —— 对应「无需合并就已同头」
+      // 的特例：真 git 中两分支同头时 `is-ancestor` 为真，此处对齐。
+      const [intoOid, branchOid] = await resolveBranchHeads(options, [target.into, target.branch]);
+      if (!intoOid || !branchOid) {
+        return {
+          target,
+          ok: false,
+          implemented: true,
+          detail: !intoOid
+            ? `分支「${target.into}」不存在或还没有提交。`
+            : `分支「${target.branch}」不存在或还没有提交。`,
+        };
+      }
+      if (intoOid === branchOid) {
+        return {
+          target,
+          ok: true,
+          implemented: true,
+          detail: `「${target.branch}」与「${target.into}」指向同一快照，已合流。`,
+        };
+      }
+      const merged = await isDescendent(intoOid, branchOid, options);
+      return {
+        target,
+        ok: merged.ok ? merged.value : false,
+        implemented: true,
+        detail: merged
+          ? `「${target.branch}」的内容已经进入「${target.into}」的时间线。`
+          : `「${target.branch}」还没有被合并进「${target.into}」。`,
+      };
+    }
+
+    // --- logOrder：提交历史的先后顺序（M4，第三章 3-5 变基） ---
+    case 'logOrder': {
+      // 判据：`branch` 的提交历史（新→旧）中，`order` 列出的关键词按同样顺序出现。
+      // 每个关键词用子串匹配某个提交信息（与 commitExists 的口径一致），
+      // 且后续关键词必须命中**更早**（或同一次遍历中更靠后）的提交。
+      const branchLog = await branchLogOf(options, target.branch);
+      if (branchLog === null) {
+        return {
+          target,
+          ok: false,
+          implemented: true,
+          detail: `分支「${target.branch}」不存在或还没有提交。`,
+        };
+      }
+
+      const matchedAt: number[] = [];
+      let cursor = 0;
+      let failedKeyword: string | null = null;
+      for (const keyword of target.order) {
+        let found = -1;
+        for (let i = cursor; i < branchLog.length; i += 1) {
+          if (branchLog[i].includes(keyword)) {
+            found = i;
+            break;
+          }
+        }
+        if (found < 0) {
+          failedKeyword = keyword;
+          break;
+        }
+        matchedAt.push(found);
+        cursor = found + 1;
+      }
+
+      if (failedKeyword !== null) {
+        return {
+          target,
+          ok: false,
+          implemented: true,
+          detail: `「${target.branch}」的历史里找不到按顺序包含「${failedKeyword}」的快照。`,
+        };
+      }
+      return {
+        target,
+        ok: true,
+        implemented: true,
+        detail: `「${target.branch}」的历史顺序符合要求（${target.order.join(' → ')}）。`,
+      };
+    }
+
+    // --- 以下 2 种属 M5/M6，明确报「尚未实现」，不静默通过（§14） ---
     case 'tag':
-    case 'merged':
-    case 'logOrder':
     case 'remote':
       return {
         target,
         ok: false,
         implemented: false,
-        detail: `目标类型 "${target.type}" 尚未实现（属 M4/M5），本关无法据此判定。`,
+        detail: `目标类型 "${target.type}" 尚未实现（属 M5/M6），本关无法据此判定。`,
       };
 
     default: {
@@ -377,7 +541,9 @@ export async function evaluateTargets(
   // 串行换来的确定性（`readFile` 的调用顺序稳定）比并发收益更值。
   const results: TargetResult[] = [];
   for (const target of toTargets(input)) {
-    results.push(await evaluateTarget(target, context));
+    // options 必须下传：branch / merged / logOrder 的判定要读仓库
+    // （测试注入 dir 时，若此处丢掉 options，判定会落到默认 /repo 上 —— 实测缺陷）
+    results.push(await evaluateTarget(target, context, options));
   }
 
   // `implemented: false` 的条件 `ok` 恒为 false，故不会意外满足

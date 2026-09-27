@@ -1,0 +1,62 @@
+/* 提交图面板样式（泳道式 SVG；§9.2 分支配色在组件内按 token 取用） */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 8px);
+  padding: var(--space-4, 16px);
+  border: 1px solid var(--border-color, #2a2f45);
+  border-radius: var(--radius-md, 10px);
+  background: var(--panel-bg, rgba(18, 21, 36, 0.75));
+  min-height: 120px;
+  overflow: auto;
+}
+
+.head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2, 8px);
+}
+
+.title {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--text-primary, #e8eaf6);
+}
+
+.meta {
+  font-size: 0.78rem;
+  color: var(--text-secondary, #8f97b3);
+}
+
+.empty {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-secondary, #8f97b3);
+}
+
+.svg {
+  max-width: 100%;
+}
+
+.laneLabel {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.node {
+  stroke: rgba(255, 255, 255, 0.65);
+  stroke-width: 1.5;
+}
+
+.hash {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  fill: var(--text-secondary, #8f97b3);
+}
+
+.message {
+  font-size: 12px;
+  fill: var(--text-primary, #e8eaf6);
+}

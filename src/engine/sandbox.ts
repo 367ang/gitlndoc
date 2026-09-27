@@ -20,7 +20,7 @@
  */
 
 import type { LevelInit } from '../game/types';
-import { GitUnsupportedError, runGit, type GitResult } from './errors';
+import { GitCommandError, GitUnsupportedError, runGit, type GitResult } from './errors';
 import { clearSandboxRoot, ensureSandboxRoot, fsp, REPO_DIR } from './fs';
 import * as gitApi from './gitApi';
 import { DEFAULT_BRANCH } from './gitApi';
@@ -29,10 +29,11 @@ import { DEFAULT_BRANCH } from './gitApi';
 export type SupportedInitField = 'files' | 'commits';
 
 /**
- * M4/M5 才会落地的 `LevelInit` 字段。
+ * M5/M6 才会落地的 `LevelInit` 字段。
  * 列出它们是为了在 fail-fast 报错里给出准确提示，而非默默吞掉。
+ * （M4 起 `branches` 已落地，自本名单移除。）
  */
-export type DeferredInitField = 'template:cloneSource' | 'branches' | 'tags' | 'remotes';
+export type DeferredInitField = 'template:cloneSource' | 'tags' | 'remotes';
 
 /**
  * `reset()` 成功的返回值。
@@ -72,7 +73,6 @@ export interface SandboxState {
 function deferredFieldsOf(init: LevelInit): DeferredInitField[] {
   const deferred: DeferredInitField[] = [];
   if (init.template === 'cloneSource') deferred.push('template:cloneSource');
-  if (init.branches?.length) deferred.push('branches');
   if (init.tags?.length) deferred.push('tags');
   if (init.remotes?.length) deferred.push('remotes');
   return deferred;
@@ -84,10 +84,10 @@ function describeFields(fields: DeferredInitField[]): string {
 }
 
 /**
- * 校验 `LevelInit` 是否超出 M1 的可落地范围。
+ * 校验 `LevelInit` 是否超出当前可落地范围。
  * 返回 `GitResult<void>` 而非抛异常，与全层契约一致。
  */
-function assertM1Scope(init: LevelInit): GitResult<void> {
+function assertSupportedScope(init: LevelInit): GitResult<void> {
   const deferred = deferredFieldsOf(init);
   if (deferred.length === 0) return { ok: true, value: undefined };
 
@@ -107,15 +107,29 @@ function assertM1Scope(init: LevelInit): GitResult<void> {
  * 清空虚拟根并依据 `LevelInit` 重建沙箱仓库（§6.1）。
  *
  * 步骤：`clearSandboxRoot()` → `ensureSandboxRoot()` → `gitApi.init()`
- *      → 写 `files` → 按 `commits` 逐条 `add` + `commit`。
+ *      → 写 `files` → 按 `commits` 逐条 `add` + `commit`
+ *      （M4 起支持提交级分支切换 `on` 与提交级文件 `files`）→ 预置空分支。
  *
- * ⚠️ `commits` 的构建方式（M1 的语义约定）：`InitCommit` 的 `author` / `date` 是
- * 关卡数据里的「叙事性署名与时间」，用于让预览的提交历史贴近真实项目。但
- * `gitApi.commit()` 按 §6.2 的要求**强制固定学习者身份**、且 isomorphic-git 的
- * `commit` 不接受逐条指定时间戳，因此 M1 产出的提交统一使用固定的学习者身份与
- * 当前时间；`author` / `date` 暂仅作为关卡数据保留，不进入对象库。
- * 这一点是**有意的取舍**，不做伪装：真实对象库优先于署名还原，
- * 而「还原历史署名/时间」属 M2 关卡数据落地时的增强项。
+ * ── M4 的分支化预置模型 ────────────────────────────────────────────────
+ *
+ * `InitCommit.on`：提交落点分支。
+ *   - 首次出现 → `gitApi.branch(name)`（从当前 HEAD 创建）+ `checkout`，随后提交落在新分支；
+ *   - 再次出现 → 仅 `checkout` 回去，继续在既有分支上提交；
+ *   - 缺省 → **回 main**（而不是「沿用当前分支」）。带 on 的预置之后若还有 main 侧提交，
+ *     「沿用当前分支」会把它们错误地落到分支上（实测缺陷：3-5 的主线推进落进了 feature）。
+ *     关卡预置的书写直觉是「on: 声明分支落点，缺省即主线」，此语义与其一致。
+ *
+ * `InitCommit.files`：本次提交前写入并暂存的文件（区别于 `LevelInit.files` 的
+ * 「进关即写入但不入库」）。用它表达「同一文件在两个分支上有不同内容」的冲突预置
+ * （3-4），因为预置提交产出的是**真实对象库**，分支分叉必须来自真实的不同提交。
+ *
+ * `LevelInit.branches`：预置**空分支**（从 `from` 指向的分支头创建，无独有提交），
+ * 服务 3-1「创建分支」类关卡 —— 目标判定要求分支存在，但不预造内容。
+ *
+ * ⚠️ `commits` 的构建方式：`InitCommit` 的 `author` / `date` 是关卡数据里的
+ * 「叙事性署名与时间」，`gitApi.commit()` 强制固定学习者身份且不接受逐条时间戳，
+ * 因此产出的提交统一使用固定身份与当前时间；`author` / `date` 仅作关卡数据保留
+ * （M1 起的有意取舍，见 gitApi.commit 与此处原注释）。
  *
  * @example 进入关卡时初始化沙箱
  * ```ts
@@ -124,7 +138,7 @@ function assertM1Scope(init: LevelInit): GitResult<void> {
  * ```
  */
 export async function reset(init: LevelInit = {}): Promise<GitResult<SandboxState>> {
-  const scope = assertM1Scope(init);
+  const scope = assertSupportedScope(init);
   if (!scope.ok) return scope;
 
   return runGit('sandbox reset', async () => {
@@ -137,17 +151,68 @@ export async function reset(init: LevelInit = {}): Promise<GitResult<SandboxStat
     const inited = await gitApi.init({ dir: REPO_DIR });
     if (!inited.ok) throw inited.error;
 
-    // 4) 写预置文件（首次写入）
+    // 4) 写预置文件（首次写入；仅入工作区，不入任何提交 —— 入库走 InitCommit.files）
     const filepaths = await writeFiles(init.files ?? {});
 
-    // 5) 建预置提交：逐条 add + commit，产出真实对象库。
-    //    注：`InitCommit` 的 `author` / `date` 见上方 reset() 的说明，M1 不进入对象库。
+    // 5) 建预置提交：逐条（切分支 →）add + commit，产出真实对象库。
+    //    `on` / `files` 的语义见函数注释「M4 的分支化预置模型」。
     for (const entry of init.commits ?? []) {
-      const added = await gitApi.add(filepaths, { dir: REPO_DIR });
-      if (!added.ok) throw added.error;
+      // 分支落点：on 缺省 = 回 main（语义见函数注释「M4 的分支化预置模型」）。
+      // 若当前已在 main 且 entry.on 缺省，跳过切换（省两次 IO）。
+      const targetBranch = entry.on ?? DEFAULT_BRANCH;
+      if (targetBranch !== DEFAULT_BRANCH) {
+        const branches = await gitApi.listBranches({ dir: REPO_DIR });
+        const exists = branches.ok && branches.value.some((b) => b.name === targetBranch);
+        if (!exists) {
+          const created = await gitApi.branch(targetBranch, { dir: REPO_DIR });
+          if (!created.ok) throw created.error;
+        }
+        const switched = await gitApi.checkout(targetBranch, { dir: REPO_DIR });
+        if (!switched.ok) throw switched.error;
+      } else {
+        const current = await gitApi.status({ dir: REPO_DIR });
+        if (current.ok && current.value.branch !== DEFAULT_BRANCH) {
+          const switched = await gitApi.checkout(DEFAULT_BRANCH, { dir: REPO_DIR });
+          if (!switched.ok) throw switched.error;
+        }
+      }
+
+      // 提交级文件：只写入并暂存**本提交**的 files（不得携带 init.files 的未入库文件 ——
+      // 否则「进关待归档」的关卡设计会被预置提交顺带入库，2-1 即因此开局即 clean，实测缺陷）。
+      // ⚠️ 空提交防御的约束（M3 修复 + 探针实测）：gitApi.commit() 在「暂存区与 HEAD
+      // 一致」时拒绝提交。**每个**预置提交都必须带 files（哪怕只是改写既有文件）——
+      // 切换到新分支后若无任何文件变化，提交会被正确地拒绝。这条约束与 3-4 的
+      // 冲突预置模型（两分支各自改写同一文件）天然吻合：冲突本就来自「双方都改」。
+      const staged = entry.files ? await writeFiles(entry.files) : [];
+
+      if (staged.length > 0) {
+        const added = await gitApi.add(staged, { dir: REPO_DIR });
+        if (!added.ok) throw added.error;
+      } else {
+        throw new GitCommandError(
+          'NoCommitError',
+          `关卡数据错误：预置提交「${entry.message || entry.msg}」没有 files，` +
+            '而空提交被引擎拒绝（M3 语义）——每个预置提交都必须至少改写一个文件。',
+          `sandbox reset: init commit "${entry.message || entry.msg}" has no files to stage`,
+        );
+      }
 
       const committed = await gitApi.commit(entry.message || entry.msg, { dir: REPO_DIR });
       if (!committed.ok) throw committed.error;
+    }
+
+    // 6) 预置空分支：从 `from` 指向的分支头创建（无独有提交）。
+    //    `from` 缺省 = 当前 HEAD（真 git 的 `git branch dev` 缺省语义）。
+    for (const { name, from } of init.branches ?? []) {
+      const created = await gitApi.branch(name, { dir: REPO_DIR, startPoint: from });
+      if (!created.ok) throw created.error;
+    }
+
+    // 7) 收尾前回到 main：关卡一律从 main 开始（`LevelInit.branches` 只要求「分支存在」）。
+    //    `InitCommit.on` 留下的检出游标也一并归位。
+    if ((init.commits ?? []).some((c) => c.on) || (init.branches ?? []).length > 0) {
+      const mainCheck = await gitApi.checkout(DEFAULT_BRANCH, { dir: REPO_DIR });
+      if (!mainCheck.ok) throw mainCheck.error;
     }
 
     // 6) 汇总状态：提交列表 + 工作区是否干净

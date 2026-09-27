@@ -5,6 +5,7 @@
 // §9.1 要求的「历史上下翻」按最小版实现（方向键在已提交的输入间移动）。
 
 import { useRef, useState } from 'react'
+import { completeAtEnd } from '../../../game/command/completion'
 import { executeToEntry } from '../../../game/command/executor'
 import { useSessionStore } from '../../../store/sessionStore'
 import styles from './Terminal.module.css'
@@ -21,9 +22,11 @@ export interface TerminalProps {
    * @param ok 该命令是否执行成功 —— 失败要与「目标未达成」区分开，供分步提示计数。
    */
   onExecuted: (ok: boolean) => void
+  /** Tab 补全候选（分支名 / 文件路径，M4）；白名单在 completion.ts 内置 */
+  completionCandidates?: readonly string[]
 }
 
-export function Terminal({ onExecuted }: TerminalProps) {
+export function Terminal({ onExecuted, completionCandidates = [] }: TerminalProps) {
   const [input, setInput] = useState('')
   const appendEntry = useSessionStore((state) => state.appendEntry)
   const history = useSessionStore((state) => state.history)
@@ -72,6 +75,33 @@ export function Terminal({ onExecuted }: TerminalProps) {
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'Tab') {
+      // Tab 补全（M4 §9.1）：只补「唯一匹配」—— 多候选时不弹列表（保持输入行简单），
+      // 而是补出公共前缀；无候选时吞掉默认行为（避免焦点跳走）。
+      const { prefix, matches } = completeAtEnd({ input, candidates: completionCandidates });
+      if (matches.length === 0) {
+        event.preventDefault();
+        return;
+      }
+      event.preventDefault();
+      if (matches.length === 1) {
+        setInput(
+          (prefix.length === 0 ? '' : input.slice(0, input.length - prefix.length)) + matches[0] + ' ',
+        );
+        return;
+      }
+      // 多候选：补公共前缀
+      let common = matches[0];
+      for (const match of matches) {
+        while (!match.startsWith(common)) common = common.slice(0, -1);
+      }
+      setInput(
+        (prefix.length === 0 ? '' : input.slice(0, input.length - prefix.length)) +
+          (common.length > prefix.length ? common : prefix),
+      );
+      return;
+    }
+
     if (event.key === 'ArrowUp') {
       if (pastCommands.length === 0) return
       event.preventDefault()

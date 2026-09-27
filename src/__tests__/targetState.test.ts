@@ -330,24 +330,20 @@ describe('targetState —— 提交历史（commitCount / commitMessage / commit
 })
 
 describe('targetState —— 尚未实现的类型（§14 明确报「尚未实现」而非静默通过）', () => {
-  it('branch / headBranch / tag / merged / logOrder / remote 一律 ok:false 且 implemented:false', async () => {
+  it('tag / remote 一律 ok:false 且 implemented:false（M4 起其余 9 种已转正）', async () => {
     await freshSandbox()
 
     const unimplemented: TargetCondition[] = [
-      { type: 'branch', name: 'dev', exists: true },
-      { type: 'headBranch', name: 'main' },
       { type: 'tag', name: 'v1.0', exists: true },
-      { type: 'merged', branch: 'dev', into: 'main' },
-      { type: 'logOrder', order: ['a'], branch: 'main' },
       { type: 'remote', name: 'origin', hasRemote: true },
     ]
 
     const state = await evaluateTargets(unimplemented)
 
     expect(state.satisfied).toBe(false)
-    expect(state.remaining).toBe(6)
+    expect(state.remaining).toBe(2)
     for (const [index, result] of state.results.entries()) {
-      // 即便条件本身「看起来该成立」（如 headBranch 就是 main），也不能静默通过
+      // 即便条件本身「看起来该成立」，也不能静默通过
       expect(result.implemented).toBe(false)
       expect(result.ok).toBe(false)
       expect(result.detail).toContain('尚未实现')

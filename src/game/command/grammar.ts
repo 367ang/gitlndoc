@@ -4,9 +4,10 @@
  * 职责：把 token 数组解析成 `git <verb> [flags] [args]` 结构，校验参数个数与合法性，
  * 产出**规范化的判别联合参数对象**。本层只做「认不认得」，不碰 git、不执行任何东西。
  *
- * ⚠️ M1 子集白名单：仅 `init` / `add` / `commit` / `status` / `log`。
- * 其余子命令（branch / checkout / merge / reset / revert / stash / tag / remote /
- * clone / push / fetch / pull …）返回 `kind: 'unsupported'` 的校验结果 ——
+ * ⚠️ M4 起的白名单：`init` / `add` / `commit` / `status` / `log` / `branch` /
+ * `checkout` / `switch` / `merge` / `rebase` / `rm` / `diff`。
+ * 其余子命令（reset / revert / stash / tag / remote / clone / push / fetch / pull …）
+ * 返回 `kind: 'unsupported'` 的校验结果 ——
  * 依据 §14「grammar 层做子集白名单，超出范围给『该版本不支持』提示而非假装执行」，
  * 绝不落到执行层。
  *
@@ -14,8 +15,21 @@
  * 与 `engine/errors.ts::GitUnsupportedError` 的文案保持一致，见 `unsupportedMessage()`。
  */
 
-/** M1 支持解析的 verb 白名单 */
-export const SUPPORTED_VERBS = ['init', 'add', 'commit', 'status', 'log'] as const;
+/** M4 支持解析的 verb 白名单 */
+export const SUPPORTED_VERBS = [
+  'init',
+  'add',
+  'commit',
+  'status',
+  'log',
+  'branch',
+  'checkout',
+  'switch',
+  'merge',
+  'rebase',
+  'rm',
+  'diff',
+] as const;
 
 /** M1 支持的子命令名 */
 export type SupportedVerb = (typeof SUPPORTED_VERBS)[number];
@@ -63,10 +77,69 @@ export interface LogCommand {
   maxCount?: number;
   /** `--reverse`：按时间正序 */
   reverse: boolean;
+  /** `--all`：全分支遍历（M4，GitGraph 数据源） */
+  all: boolean;
+}
+
+/** `git branch <name>` 的规范化参数（M4） */
+export interface BranchCommand {
+  verb: 'branch';
+  /** 要创建的分支名；缺省 = 列出分支（`git branch` 无参数） */
+  name?: string;
+}
+
+/** `git checkout <branch>` / `git switch <branch>` 的规范化参数（M4） */
+export interface CheckoutCommand {
+  verb: 'checkout' | 'switch';
+  /** 目标分支名 */
+  branch: string;
+  /** `-b <name>`（checkout）/ `-c <name>`（switch）：创建并切换 */
+  create: boolean;
+}
+
+/** `git merge <branch>` 的规范化参数（M4） */
+export interface MergeCommand {
+  verb: 'merge';
+  /** 被合入当前分支的分支名 */
+  branch: string;
+}
+
+/** `git rebase <upstream>` 的规范化参数（M4） */
+export interface RebaseCommand {
+  verb: 'rebase';
+  /** 变基目标（把当前分支重放到它之上） */
+  upstream: string;
+}
+
+/** `git rm <pathspec>` 的规范化参数（M4） */
+export interface RmCommand {
+  verb: 'rm';
+  /** `--cached`：只从索引移除、保留工作区文件 */
+  cached: boolean;
+  /** 要移除的路径 */
+  paths: string[];
+}
+
+/** `git diff [--staged]` 的规范化参数（M4） */
+export interface DiffCommand {
+  verb: 'diff';
+  /** `--staged`：显示「已暂存、将要提交」的差异（缺省 = 未暂存改动） */
+  staged: boolean;
 }
 
 /** 命令参数的判别联合 */
-export type ParsedCommand = InitCommand | AddCommand | CommitCommand | StatusCommand | LogCommand;
+export type ParsedCommand =
+  | InitCommand
+  | AddCommand
+  | CommitCommand
+  | StatusCommand
+  | LogCommand
+  | BranchCommand
+  | CheckoutCommand
+  | MergeCommand
+  | RebaseCommand
+  | RmCommand
+  | DiffCommand;
 
 /** 校验失败的类别，供 UI 决定呈现方式（提示 / 报错 / 警告） */
 export type GrammarErrorKind =
@@ -142,6 +215,19 @@ export function parse(tokens: string[]): GrammarResult {
       return parseStatus(rest);
     case 'log':
       return parseLog(rest);
+    case 'branch':
+      return parseBranch(rest);
+    case 'checkout':
+    case 'switch':
+      return parseCheckout(verb as 'checkout' | 'switch', rest);
+    case 'merge':
+      return parseMerge(rest);
+    case 'rebase':
+      return parseRebase(rest);
+    case 'rm':
+      return parseRm(rest);
+    case 'diff':
+      return parseDiff(rest);
     default:
       // SUPPORTED_VERBS 已在上方过滤，此处不可达；保留以满足穷尽性检查
       return fail('unsupported', unsupportedMessage(verb));
@@ -271,10 +357,11 @@ function parseStatus(args: string[]): GrammarResult {
   return { ok: true, command: { verb: 'status', short } };
 }
 
-/** `git log [--oneline] [-n <count>] [--reverse]` */
+/** `git log [--oneline] [-n <count>] [--reverse] [--all]` */
 function parseLog(args: string[]): GrammarResult {
   let oneline = false;
   let reverse = false;
+  let all = false;
   let maxCount: number | undefined;
 
   for (let i = 0; i < args.length; i += 1) {
@@ -286,6 +373,10 @@ function parseLog(args: string[]): GrammarResult {
     }
     if (arg === '--reverse') {
       reverse = true;
+      continue;
+    }
+    if (arg === '--all') {
+      all = true;
       continue;
     }
     if (arg === '-n' || arg === '--max-count') {
@@ -317,5 +408,139 @@ function parseLog(args: string[]): GrammarResult {
     return fail('invalid-usage', `git log 不支持参数 ${arg}。`);
   }
 
-  return { ok: true, command: { verb: 'log', oneline, maxCount, reverse } };
+  return { ok: true, command: { verb: 'log', oneline, maxCount, reverse, all } };
+}
+
+/** 分支名的最小合法性：非空、无空白、不以 `-` 开头、不含 `..` / 空格控制符 */
+function isValidBranchName(name: string): boolean {
+  return name.length > 0 && !name.startsWith('-') && !/\s/.test(name) && !name.includes('..');
+}
+
+const BRANCH_NAME_HINT = '分支名不能包含空格，且不能以 - 开头。';
+
+/** `git branch [<name>]`（M4；`-d`/`-D`/`-m` 等分支管理属后续章节，走 invalid-usage 提示「不支持」） */
+function parseBranch(args: string[]): GrammarResult {
+  for (const arg of args) {
+    if (isFlag(arg)) {
+      return fail('invalid-usage', `git branch 暂不支持选项 ${arg}（本版本仅支持创建与查看）。`);
+    }
+  }
+  if (args.length > 1) {
+    return fail('invalid-usage', 'git branch 一次只能创建一个分支。');
+  }
+  if (args.length === 0) {
+    // `git branch` 无参数 = 列出分支
+    return { ok: true, command: { verb: 'branch' } };
+  }
+  const [name] = args;
+  if (!isValidBranchName(name)) {
+    return fail('invalid-usage', `「${name}」不是有效的分支名。${BRANCH_NAME_HINT}`);
+  }
+  return { ok: true, command: { verb: 'branch', name } };
+}
+
+/** `git checkout [-b] <branch>` / `git switch [-c] <branch>`（M4） */
+function parseCheckout(verb: 'checkout' | 'switch', args: string[]): GrammarResult {
+  const createFlag = verb === 'checkout' ? '-b' : '-c';
+  let create = false;
+  const positional: string[] = [];
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === createFlag) {
+      const value = args[i + 1];
+      if (value === undefined) {
+        return fail('invalid-usage', `git ${verb} ${createFlag} 后面需要跟上分支名。`);
+      }
+      if (!isValidBranchName(value)) {
+        return fail('invalid-usage', `「${value}」不是有效的分支名。${BRANCH_NAME_HINT}`);
+      }
+      create = true;
+      positional.push(value);
+      i += 1;
+      continue;
+    }
+    if (isFlag(arg)) {
+      return fail('invalid-usage', `git ${verb} 不支持选项 ${arg}。`);
+    }
+    positional.push(arg);
+  }
+
+  if (positional.length !== 1) {
+    return fail('invalid-usage', `git ${verb} 需要恰好一个分支名，例如：git ${verb} main`);
+  }
+  const [branch] = positional;
+  if (!create && !isValidBranchName(branch)) {
+    return fail('invalid-usage', `「${branch}」不是有效的分支名。${BRANCH_NAME_HINT}`);
+  }
+  return { ok: true, command: { verb, branch, create } };
+}
+
+/** `git merge <branch>`（M4） */
+function parseMerge(args: string[]): GrammarResult {
+  for (const arg of args) {
+    if (isFlag(arg)) {
+      return fail('invalid-usage', `git merge 暂不支持选项 ${arg}（如 --no-ff / --abort）。`);
+    }
+  }
+  if (args.length !== 1) {
+    return fail('invalid-usage', 'git merge 需要恰好一个分支名，例如：git merge feature');
+  }
+  const [branch] = args;
+  if (!isValidBranchName(branch)) {
+    return fail('invalid-usage', `「${branch}」不是有效的分支名。${BRANCH_NAME_HINT}`);
+  }
+  return { ok: true, command: { verb: 'merge', branch } };
+}
+
+/** `git rebase <upstream>`（M4） */
+function parseRebase(args: string[]): GrammarResult {
+  for (const arg of args) {
+    if (isFlag(arg)) {
+      return fail('invalid-usage', `git rebase 暂不支持选项 ${arg}（如 -i / --onto）。`);
+    }
+  }
+  if (args.length !== 1) {
+    return fail('invalid-usage', 'git rebase 需要恰好一个分支名，例如：git rebase main');
+  }
+  const [upstream] = args;
+  if (!isValidBranchName(upstream)) {
+    return fail('invalid-usage', `「${upstream}」不是有效的分支名。${BRANCH_NAME_HINT}`);
+  }
+  return { ok: true, command: { verb: 'rebase', upstream } };
+}
+
+/** `git rm [--cached] <pathspec>...`（M4） */
+function parseRm(args: string[]): GrammarResult {
+  let cached = false;
+  const paths: string[] = [];
+
+  for (const arg of args) {
+    if (arg === '--cached') {
+      cached = true;
+      continue;
+    }
+    if (isFlag(arg)) {
+      return fail('invalid-usage', `git rm 不支持选项 ${arg}。`);
+    }
+    paths.push(arg);
+  }
+
+  if (paths.length === 0) {
+    return fail('invalid-usage', '请指定要移除的文件路径，例如：git rm secrets.log');
+  }
+  return { ok: true, command: { verb: 'rm', cached, paths } };
+}
+
+/** `git diff [--staged]`（M4） */
+function parseDiff(args: string[]): GrammarResult {
+  let staged = false;
+  for (const arg of args) {
+    if (arg === '--staged' || arg === '--cached') {
+      staged = true;
+      continue;
+    }
+    return fail('invalid-usage', `git diff 暂不支持参数 ${arg}（本版本仅支持无参数与 --staged）。`);
+  }
+  return { ok: true, command: { verb: 'diff', staged } };
 }

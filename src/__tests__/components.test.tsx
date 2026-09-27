@@ -44,6 +44,11 @@ import { useViewStore } from '../store/viewStore'
 import { HintsPanel } from '../ui/components/level/HintsPanel'
 import { LevelComplete } from '../ui/components/level/LevelComplete'
 import { MenuScreen } from '../ui/components/menu/MenuScreen'
+import { GitGraph } from '../ui/components/gitGraph/GitGraph'
+import { BranchPanel } from '../ui/components/gitGraph/BranchPanel'
+import { FileTree } from '../ui/components/fileTree/FileTree'
+import { useFileTree } from '../ui/components/fileTree/useFileTree'
+import { execute } from '../game/command/executor'
 import { getUnlockedHints } from '../game/validate/stepHints'
 import { CHAPTER_1_LEVELS } from '../levels/chapters/ch1'
 import type { TargetResult } from '../game/validate/targetState'
@@ -636,8 +641,9 @@ describe('components —— Terminal 输入与历史', () => {
     render(<Terminal onExecuted={(ok) => executed.push(ok)} />)
 
     const input = screen.getByLabelText('命令输入') as HTMLInputElement
-    // `git merge` 属 M4/M5，当前版本明确回「尚不支持」
-    fireEvent.change(input, { target: { value: 'git merge dev' } })
+    // `git stash` 属 M5，当前版本明确回「尚不支持」（M4 已把 merge/branch 转正，
+    // 不能再拿它们当「不支持」的代表 —— 这里换成白名单外仍存在的 stash）
+    fireEvent.change(input, { target: { value: 'git stash' } })
     fireEvent.submit(input.closest('form')!)
 
     await waitFor(() => expect(useSessionStore.getState().history).toHaveLength(1))
@@ -948,5 +954,123 @@ describe('components —— MenuScreen（M3 汇总与成就入口）', () => {
     expect(items).toHaveLength(5)
     expect(items[0]!.dataset.unlocked).toBe('true')
     expect(items[1]!.dataset.unlocked).toBe('false')
+  })
+})
+
+// ── M4：GitGraph / BranchPanel / 文件编辑器 / 半拼骨架 / 章节解锁 ─────────────
+
+describe('components —— M4 GitGraph 与 BranchPanel', () => {
+  it('GitGraph 渲染提交节点与泳道标注（有提交时）', async () => {
+    await freshSandbox()
+    await fsp.writeFile('/repo/a.txt', 'a\n', 'utf8')
+    await execute('git add .', { dir: '/repo' })
+    await execute('git commit -m "首个快照"', { dir: '/repo' })
+
+    render(<GitGraph version={1} />)
+    await waitFor(() => expect(screen.getByTestId('git-graph')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/首个快照/)).toBeInTheDocument())
+    // 泳道标注 main
+    await waitFor(() => expect(screen.getByText('main')).toBeInTheDocument())
+  })
+
+  it('BranchPanel 列出分支并高亮当前分支', async () => {
+    await freshSandbox()
+    await fsp.writeFile('/repo/a.txt', 'a\n', 'utf8')
+    await execute('git add .', { dir: '/repo' })
+    await execute('git commit -m "c1"', { dir: '/repo' })
+    await execute('git branch dev', { dir: '/repo' })
+
+    render(<BranchPanel version={1} />)
+    await waitFor(() => expect(screen.getByTestId('branch-panel')).toBeInTheDocument())
+    expect(screen.getByText(/dev/)).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText(/★ main/)).toBeInTheDocument())
+  })
+})
+
+describe('components —— M4 FileTree 内嵌编辑器', () => {
+  it('点击文件 → 编辑 → 保存写入工作区并回调（制造真实改动）', async () => {
+    await freshSandbox()
+    await fsp.writeFile('/repo/diary.md', '草稿\n', 'utf8')
+    await execute('git add .', { dir: '/repo' })
+    await execute('git commit -m "c1"', { dir: '/repo' })
+    await fsp.writeFile('/repo/diary.md', '草稿\n改动\n', 'utf8')
+
+    const saved: string[] = []
+    // useFileTree 内部跑 executor 读 status —— version 用受控 state
+    function Harness() {
+      const [version, setVersion] = useState(1)
+      const tree = useFileTree(version)
+      return (
+        <>
+          <FileTree nodes={tree.tree} branch={tree.branch} loading={tree.loading} onFileSaved={handle} />
+          <button type="button" onClick={() => setVersion((v) => v + 1)} aria-label="刷新">
+            刷新
+          </button>
+        </>
+      )
+      function handle(path: string) {
+        saved.push(path)
+        setVersion((v) => v + 1)
+      }
+    }
+
+    render(<Harness />)
+    await waitFor(() => expect(screen.getByLabelText('编辑文件 diary.md')).toBeInTheDocument())
+    fireEvent.click(screen.getByLabelText('编辑文件 diary.md'))
+
+    const editor = await screen.findByTestId('file-editor')
+    expect(editor).toBeInTheDocument()
+    const area = screen.getByLabelText('文件 diary.md 的内容') as HTMLTextAreaElement
+    expect(area.value).toBe('草稿\n改动\n')
+    fireEvent.change(area, { target: { value: '草稿\n改动\n定稿\n' } })
+    fireEvent.click(screen.getByLabelText('保存 diary.md'))
+
+    await waitFor(() => expect(saved).toEqual(['diary.md']))
+    const written = String(await fsp.readFile('/repo/diary.md', 'utf8'))
+    expect(written).toBe('草稿\n改动\n定稿\n')
+  })
+
+  it('编辑器拒绝 .git 与越界路径（game/editor.ts 的 UI 呈现层面由保存回执兜底）', async () => {
+    const bad = await import('../game/editor')
+    expect((await bad.writeWorkdirFile('../outside.txt', 'x')).ok).toBe(false)
+    expect((await bad.writeWorkdirFile('.git/config', 'x')).ok).toBe(false)
+    expect((await bad.writeWorkdirFile('/abs.txt', 'x')).ok).toBe(false)
+  })
+})
+
+describe('components —— M4 半拼骨架预填与章节解锁', () => {
+  it('ChapterScreen 对半拼关卡显示「半拼输入」', () => {
+    render(<ChapterScreen chapterId="ch3" />)
+    expect(screen.getByText('冲突消解')).toBeInTheDocument()
+    // ch3 全部 6 关都是半拼 → 文案出现 6 次
+    expect(screen.getAllByText(/半拼输入/)).toHaveLength(6)
+  })
+
+  it('MenuScreen 未解锁章节显示 🔒 且按钮禁用（通关上一章全部关卡后解锁）', () => {
+    useProgressStore.setState({ levelRecords: {}, achievements: [] })
+    render(<MenuScreen />)
+    // ch1 恒解锁、ch2/ch3 未解锁（无通关记录）
+    // ch2 与 ch3 都未解锁 → 文案出现 2 次
+    expect(screen.getAllByText(/🔒 完成上一章全部关卡后解锁/)).toHaveLength(2)
+    // ch2 的开始按钮被禁用
+    const ch2Start = screen.getByLabelText('直接开始 ch2-1 状态感知')
+    expect(ch2Start).toBeDisabled()
+    // ch1 的开始按钮可用
+    expect(screen.getByLabelText('直接开始 ch1-1 时间线初始化')).toBeEnabled()
+  })
+
+  it('ch1 全通关 → ch2 解锁（按钮可用）', () => {
+    const records: Record<string, { score: number; stars: number; cleared: boolean }> = {}
+    for (const level of CHAPTER_1_LEVELS) {
+      records[level.id] = { score: 100, stars: 3, cleared: true }
+    }
+    useProgressStore.setState({ levelRecords: records, achievements: [] })
+    render(<MenuScreen />)
+    // ch2 解锁：显示关卡数（不再显示 🔒），ch3 仍锁
+    // ch2 解锁后显示关卡数；ch1 也显示（2 处匹配 4 个关卡）
+    expect(screen.getAllByText(/4 个关卡/).length).toBeGreaterThanOrEqual(1)
+    const ch2Start = screen.getByLabelText('直接开始 ch2-1 状态感知')
+    expect(ch2Start).toBeEnabled()
+    expect(screen.getByLabelText('直接开始 ch3-1 分裂宇宙')).toBeDisabled()
   })
 })

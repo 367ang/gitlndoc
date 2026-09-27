@@ -20,6 +20,8 @@
 //   而 `vite/client`（经 `src/vite-env.d.ts` 引入）已为 `?raw` 提供类型声明，
 //   测试与构建走的也是同一套解析 —— 比在测试里另开一条 Node 读取通道更贴合项目约定。
 import gitBasicsRaw from '../../notes/git-basics.md?raw'
+import gitBasicOperationsRaw from '../../notes/git-basic-operations.md?raw'
+import gitBranchesRaw from '../../notes/git-branches.md?raw'
 import { describe, expect, it } from 'vitest'
 import {
   CHAPTERS,
@@ -30,6 +32,8 @@ import {
   getLevel,
 } from '../levels/chapters'
 import { CHAPTER_1_LEVELS } from '../levels/chapters/ch1'
+import { CHAPTER_2_LEVELS } from '../levels/chapters/ch2'
+import { CHAPTER_3_LEVELS } from '../levels/chapters/ch3'
 import {
   IMPLEMENTED_TARGET_TYPES,
   UNIMPLEMENTED_TARGET_TYPES,
@@ -40,6 +44,8 @@ import {
 import { reset } from '../engine/sandbox'
 import { configureFs, type FsIdb } from '../engine/fs'
 import { evaluateTargets } from '../game/validate/targetState'
+import { execute } from '../game/command/executor'
+import { LOG_PAGE_THIRD, UNIVERSE_BASE } from '../levels/presets'
 import * as LightningFsNS from '@isomorphic-git/lightning-fs'
 import type { ChapterId, Level } from '../game/types'
 
@@ -48,6 +54,8 @@ const MemoryBackend = (LightningFsNS as unknown as { MemoryBackend: new () => Fs
 /** 已登记的笔记正文（新增笔记时在此补一行 `?raw` 导入） */
 const NOTES: Record<string, string> = {
   'git-basics': gitBasicsRaw,
+  'git-basic-operations': gitBasicOperationsRaw,
+  'git-branches': gitBranchesRaw,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -68,17 +76,35 @@ const NOTES: Record<string, string> = {
 // 这张表就是「笔记小节 ↔ slug」的事实来源，新增小节时在此补一行。
 //
 // 键为笔记内**逐字**的小节标题（含 `#` 前缀与可能的英文括注），值为约定的 slug。
+/** slug → 笔记小节标题（逐字）。反查时用 headingOf(note) 验证标题真实存在。
+ *  ⚠️ 键是 slug（唯一），值是标题 —— 因此「status 与 diff 共用『### 查看状态』小节」
+ *  可以自然表达（两个 slug 指向同一标题），不会像 heading→slug 那样撞键。 */
 const SLUG_BY_HEADING: Record<string, string> = {
-  // 规则 A：小节标题带英文括注，slug 取括注
-  '### 工作区 (Working Directory)': 'working-directory',
-  '### 暂存区 (Staging Area)': 'staging-area',
-  '### 本地仓库 (Local Repository)': 'local-repository',
-  '### 远程仓库 (Remote Repository)': 'remote-repository',
-  // 规则 B：纯中文标题，slug 为核定意译
-  '## 三大核心区域': 'three-areas',
-  '## 工作流程图解': 'workflow',
-  '## 为什么要有暂存区？': 'why-staging',
-  '## 对象模型': 'object-model',
+  // 规则 A（git-basics）：小节标题带英文括注，slug 取括注
+  'working-directory': '### 工作区 (Working Directory)',
+  'staging-area': '### 暂存区 (Staging Area)',
+  'local-repository': '### 本地仓库 (Local Repository)',
+  'remote-repository': '### 远程仓库 (Remote Repository)',
+  // 规则 B（git-basics）：纯中文标题，slug 为核定意译
+  'three-areas': '## 三大核心区域',
+  'workflow': '## 工作流程图解',
+  'why-staging': '## 为什么要有暂存区？',
+  'object-model': '## 对象模型',
+  // 规则 B（git-basic-operations，M4 ch2）：标题即语义，意译取英文关键词。
+  // ⚠️ `diff` 的用法写在「### 查看状态」小节内（笔记无独立 diff 小节），
+  // 2-2 的知识点引用因此也指向该小节 —— 两个 slug 指向同一标题，合法。
+  'status': '### 查看状态',
+  'diff': '### 查看状态',
+  'log': '### 查看历史',
+  'rm': '### 删除文件',
+  'ignore': '### 忽略文件',
+  // 规则 B（git-branches，M4 ch3）
+  'create': '### 创建分支',
+  'switch': '### 切换分支',
+  'basic-merge': '### 基本合并',
+  'merge-conflict': '### 合并冲突处理',
+  'rebase-vs-merge': '### Rebase vs Merge',
+  'best-practices': '## 分支管理最佳实践',
 }
 
 /** 读一篇笔记的正文；未登记时抛错（比静默返回空串更容易定位） */
@@ -154,21 +180,38 @@ describe('关卡数据 —— 第一章 id 与顺序', () => {
     expect(getLevel('随便')).toBeNull()
 
     expect(getFirstLevelOfChapter('ch1')?.id).toBe('ch1-1')
-    // 尚未落地的章节如实返回空数组 / null，不伪造占位关卡（§14）
-    expect(getChapterLevels('ch3')).toEqual([])
-    expect(getFirstLevelOfChapter('ch3')).toBeNull()
+    // 尚未落地的章节如实返回空数组 / null，不伪造占位关卡（§14）—— M4 起仅 ch4+ 为空
+    expect(getChapterLevels('ch4')).toEqual([])
+    expect(getFirstLevelOfChapter('ch4')).toBeNull()
 
-    expect(getAllLevels().map((level) => level.id)).toEqual(['ch1-1', 'ch1-2', 'ch1-3', 'ch1-4'])
+    expect(getAllLevels().map((level) => level.id)).toEqual([
+      'ch1-1',
+      'ch1-2',
+      'ch1-3',
+      'ch1-4',
+      'ch2-1',
+      'ch2-2',
+      'ch2-3',
+      'ch2-4',
+      'ch3-1',
+      'ch3-2',
+      'ch3-3',
+      'ch3-4',
+      'ch3-5',
+      'ch3-6',
+    ])
   })
 
-  it('章节元信息：只有 ch1 可玩，综合挑战不参与主线排序', () => {
+  it('章节元信息：M4 起前三章可玩，综合挑战不参与主线排序', () => {
     expect(getChapterMeta('ch1')?.playable).toBe(true)
     expect(getChapterMeta('ch1')?.order).toBe(1)
-    for (const id of ['ch2', 'ch3', 'ch4', 'ch5', 'ch6'] as ChapterId[]) {
+    expect(getChapterMeta('ch2')?.playable).toBe(true)
+    expect(getChapterMeta('ch3')?.playable).toBe(true)
+    for (const id of ['ch4', 'ch5', 'ch6'] as ChapterId[]) {
       expect(getChapterMeta(id)?.playable).toBe(false)
     }
     expect(getChapterMeta('F')?.order).toBeNull()
-    expect(getChapterMeta('ch2')?.title.length).toBeGreaterThan(0)
+    expect(getChapterMeta('ch4')?.title.length).toBeGreaterThan(0)
   })
 })
 
@@ -236,8 +279,8 @@ describe('关卡数据 —— schema 校验', () => {
   it('schema 拒绝尚未落地的 init 字段（与 sandbox.reset 的 fail-fast 同一口径）', () => {
     const good = CHAPTER_1_LEVELS[0]
 
+    // M4 起 branches 已落地（分支关卡需要），名单只剩 tags / remotes / cloneSource
     for (const init of [
-      { branches: [{ name: 'dev', from: 'main' }] },
       { tags: [{ name: 'v1', at: 'abc' }] },
       { remotes: [{ name: 'origin', url: 'x' }] },
       { template: 'cloneSource' as const },
@@ -245,6 +288,9 @@ describe('关卡数据 —— schema 校验', () => {
       const result = validateLevel({ ...good, init })
       expect(result.ok).toBe(false)
     }
+
+    // branches 现在是合法字段，且带 name/from 的写法能过校验
+    expect(validateLevel({ ...good, init: { branches: [{ name: 'dev', from: 'main' }] } }).ok).toBe(true)
   })
 })
 
@@ -262,8 +308,8 @@ describe('关卡数据 —— targets 类型范围', () => {
   })
 
   it('IMPLEMENTED_TARGET_TYPES 与 UNIMPLEMENTED_TARGET_TYPES 互补且覆盖全部 11 种', () => {
-    expect(IMPLEMENTED_TARGET_TYPES).toHaveLength(5)
-    expect(UNIMPLEMENTED_TARGET_TYPES).toHaveLength(6)
+    expect(IMPLEMENTED_TARGET_TYPES).toHaveLength(9)
+    expect(UNIMPLEMENTED_TARGET_TYPES).toHaveLength(2)
 
     const all = [...IMPLEMENTED_TARGET_TYPES, ...UNIMPLEMENTED_TARGET_TYPES]
     expect(new Set(all).size).toBe(11)
@@ -273,7 +319,17 @@ describe('关卡数据 —— targets 类型范围', () => {
     }
     // schema 里登记的「已实现」应与 targetState 实际实现的一致
     expect([...IMPLEMENTED_TARGET_TYPES].sort()).toEqual(
-      ['commitCount', 'commitExists', 'commitMessage', 'file', 'workdirClean'].sort(),
+      [
+        'branch',
+        'commitCount',
+        'commitExists',
+        'commitMessage',
+        'file',
+        'headBranch',
+        'logOrder',
+        'merged',
+        'workdirClean',
+      ].sort(),
     )
   })
 
@@ -426,7 +482,8 @@ describe('关卡数据 —— relatedKnowledge 反查笔记', () => {
         const headings = headingsOf(note)
 
         // 找出 slug 对应的标题：查显式映射表
-        const matched = Object.entries(SLUG_BY_HEADING).filter(([, value]) => value === slug)
+        const heading = SLUG_BY_HEADING[slug]
+        const matched = heading === undefined ? [] : [[heading, slug]]
         expect(
           matched.length,
           `${id} 的 slug "${slug}" 未登记在 SLUG_BY_HEADING 中；` +
@@ -449,16 +506,18 @@ describe('关卡数据 —— relatedKnowledge 反查笔记', () => {
     // 反向校验：映射表本身不许有「僵尸条目」——否则映射表会慢慢与笔记脱节。
     const headingsByNote = new Map<string, Set<string>>([
       ['git-basics', headingsOf('git-basics')],
+      ['git-basic-operations', headingsOf('git-basic-operations')],
+      ['git-branches', headingsOf('git-branches')],
     ])
 
-    for (const [heading] of Object.entries(SLUG_BY_HEADING)) {
+    for (const [slug, heading] of Object.entries(SLUG_BY_HEADING)) {
       const found = [...headingsByNote.values()].some((headings) => headings.has(heading))
-      expect(found, `SLUG_BY_HEADING 的键 "${heading}" 在任何笔记里都找不到`).toBe(true)
+      expect(found, `SLUG_BY_HEADING 的 slug "${slug}" → 标题 "${heading}" 在任何笔记里都找不到`).toBe(true)
     }
 
     // 两套规则都要有代表，避免有人「简化」成单一规则时测试仍通过
-    expect(SLUG_BY_HEADING['### 本地仓库 (Local Repository)']).toBe('local-repository')
-    expect(SLUG_BY_HEADING['## 对象模型']).toBe('object-model')
+    expect(SLUG_BY_HEADING['local-repository']).toBe('### 本地仓库 (Local Repository)')
+    expect(SLUG_BY_HEADING['object-model']).toBe('## 对象模型')
   })
 
   it('第一章的 4 关各自关联的 id 与核定映射一致', () => {
@@ -555,6 +614,295 @@ describe('关卡数据 —— 其余字段的取值合理性', () => {
       const hasLevels = getChapterLevels(chapter.id).length > 0
       // 反过来也成立：有关卡就必须标记为可玩，否则菜单会把它画成禁用态
       expect(chapter.playable).toBe(hasLevels)
+    }
+  })
+})
+
+// ── M4：第二、三章关卡数据 ───────────────────────────────────────────────────
+
+describe('关卡数据 —— 第二、三章 id 与注册', () => {
+  it('ch2 恰为 4 关（2-1~2-4），ch3 恰为 6 关（3-1~3-6）', () => {
+    expect(CHAPTER_2_LEVELS.map((level) => level.id)).toEqual(['ch2-1', 'ch2-2', 'ch2-3', 'ch2-4'])
+    expect(CHAPTER_3_LEVELS.map((level) => level.id)).toEqual([
+      'ch3-1',
+      'ch3-2',
+      'ch3-3',
+      'ch3-4',
+      'ch3-5',
+      'ch3-6',
+    ])
+  })
+
+  it('ch2/ch3 已注册：章节 playable 且 getChapterLevels 可达', () => {
+    expect(getChapterMeta('ch2')?.playable).toBe(true)
+    expect(getChapterMeta('ch3')?.playable).toBe(true)
+    expect(getChapterLevels('ch2')).toHaveLength(4)
+    expect(getChapterLevels('ch3')).toHaveLength(6)
+    expect(getLevel('ch3-4')?.title).toBe('冲突消解')
+    // getAllLevels 覆盖三章共 14 关
+    expect(getAllLevels()).toHaveLength(14)
+  })
+
+  it('输入模式：ch2 全部拼接（menu），ch3 全部半拼（half）', () => {
+    for (const level of CHAPTER_2_LEVELS) {
+      expect(level.inputMode).toBe('menu')
+    }
+    for (const level of CHAPTER_3_LEVELS) {
+      expect(level.inputMode).toBe('half')
+      // 半拼关卡必须提供骨架（schema 校验之外的数据级断言）
+      expect(level.halfSkeleton).toMatch(/^git [a-z]/)
+    }
+    // 骨架与关卡任务匹配（防复制粘贴错骨架）
+    expect(getLevel('ch3-1')?.halfSkeleton).toBe('git branch')
+    expect(getLevel('ch3-3')?.halfSkeleton).toBe('git merge')
+    expect(getLevel('ch3-5')?.halfSkeleton).toBe('git checkout')
+  })
+})
+
+describe('关卡数据 —— 第二、三章 schema 与命令集约束', () => {
+  it('10 关全部通过 validateLevel 校验', () => {
+    for (const level of [...CHAPTER_2_LEVELS, ...CHAPTER_3_LEVELS]) {
+      const result = validateLevel(level)
+      if (!result.ok) throw new Error(`${level.id} 校验失败：\n- ${result.errors.join('\n- ')}`)
+    }
+  })
+
+  it('ch2 只用第二章命令集相关的目标；ch3 用到 M4 转正的分支目标', () => {
+    const ch2Types = new Set(CHAPTER_2_LEVELS.flatMap((level) => level.targets.map((t) => t.type)))
+    for (const type of ch2Types) {
+      expect(IMPLEMENTED_TARGET_TYPES).toContain(type)
+    }
+    const ch3Types = new Set(CHAPTER_3_LEVELS.flatMap((level) => level.targets.map((t) => t.type)))
+    // M4 转正的 4 种里至少用到 3 种（branch/headBranch/merged/logOrder）
+    for (const needed of ['headBranch', 'merged']) {
+      expect(ch3Types.has(needed as never)).toBe(true)
+    }
+    // 不用 M5/M6 的类型
+    for (const level of [...CHAPTER_2_LEVELS, ...CHAPTER_3_LEVELS]) {
+      for (const target of level.targets) {
+        expect(UNIMPLEMENTED_TARGET_TYPES).not.toContain(target.type)
+      }
+    }
+  })
+
+  it('ch2/ch3 的 init 预置满足「每个提交都有 files」（M3 空提交防御的关卡侧约束）', () => {
+    for (const level of [...CHAPTER_2_LEVELS, ...CHAPTER_3_LEVELS]) {
+      const commits = level.init.commits ?? []
+      commits.forEach((commit, index) => {
+        if (!commit.files || Object.keys(commit.files).length === 0) {
+          throw new Error(`${level.id} 的预置提交 ${index} 缺少 files（会触发空提交防御）`)
+        }
+      })
+    }
+  })
+
+  it('ch3 分支预置：涉及冲突的关卡（3-4）两分支改同一文件；变基关（3-5）改动互不相交', () => {
+    const l34 = assertValidLevel(getLevel('ch3-4'))
+    // main 侧改写 beacon.md、feature 侧也改写 beacon.md（冲突前提）
+    const mainCommits = l34.init.commits!.filter((c) => !c.on)
+    const featureCommits = l34.init.commits!.filter((c) => c.on === 'feature')
+    expect(mainCommits.some((c) => Object.keys(c.files ?? {}).includes('beacon.md'))).toBe(true)
+    expect(featureCommits.some((c) => Object.keys(c.files ?? {}).includes('beacon.md'))).toBe(true)
+    // 且两侧内容不同（真的冲突）
+    const mainContent = mainCommits.find((c) => c.files?.['beacon.md'])?.files?.['beacon.md']
+    const featureContent = featureCommits.find((c) => c.files?.['beacon.md'])?.files?.['beacon.md']
+    expect(mainContent).not.toBe(featureContent)
+
+    const l35 = assertValidLevel(getLevel('ch3-5'))
+    const l35FeatureFiles = new Set(
+      l35.init
+        .commits!.filter((c) => c.on === 'feature')
+        .flatMap((c) => Object.keys(c.files ?? {})),
+    )
+    const l35MainFiles = new Set(
+      l35.init.commits!.filter((c) => !c.on).flatMap((c) => Object.keys(c.files ?? {})),
+    )
+    for (const path of l35FeatureFiles) {
+      expect(l35MainFiles.has(path)).toBe(false)
+    }
+  })
+})
+
+describe('关卡数据 —— 第二、三章可解性（真实引擎走通）', () => {
+  let caseIndexM4 = 0
+  async function freshSandboxM4(init: Level['init'] = {}): Promise<void> {
+    caseIndexM4 += 1
+    configureFs({ name: `levels-m4-${Date.now()}-${caseIndexM4}`, backend: new MemoryBackend() })
+    const result = await reset(init)
+    if (!result.ok) throw new Error(`沙箱初始化失败：${result.error.toString()}`)
+  }
+
+  const solutions: Record<string, string[]> = {
+    'ch2-1': ['git status', 'git add .', 'git commit -m "归档待归档观测"'],
+    'ch2-2': ['git add diary.md', 'git commit -m "记录修复要点"'],
+    'ch2-3': ['git log --oneline', 'git add .', 'git commit -m "续写回溯档案"'],
+    'ch2-4': ['git rm secrets.log', 'git commit -m "移除密钥残片"', 'git add .gitignore', 'git commit -m "忽略缓存噪声"'],
+    'ch3-1': ['git branch dev'],
+    'ch3-2': ['git checkout feature', 'git add base.md', 'git commit -m "feature 观测"'],
+    'ch3-3': ['git merge feature'],
+    'ch3-4': ['git merge feature', 'git add .', "git commit -m \"Merge branch 'feature' into main\""],
+    'ch3-5': ['git checkout feature', 'git rebase main'],
+    'ch3-6': ['git merge collaborative'],
+  }
+
+  /** 编辑器模拟：ch2-2 写日记、ch2-3 续写、ch2-4 创建 .gitignore、3-4 裁决坐标 */
+  const editorSteps: Record<string, Array<[string, string]>> = {
+    'ch2-2': [['diary.md', '修复日记 · 定稿\n\n修复要点：时间线校准完成。\n']],
+    'ch2-3': [['third.md', LOG_PAGE_THIRD + '\n回溯完成。\n']],
+    'ch2-4': [['.gitignore', 'cache.log\n']],
+    'ch3-4': [
+      [
+        'beacon.md',
+        '信标坐标\n\n纬度：北纬 37.5\n经度：东经 105\n\n两个宇宙读数的折中，由你亲自裁决。\n',
+      ],
+    ],
+  }
+
+  it('10 关开局不得即达标', async () => {
+    for (const level of [...CHAPTER_2_LEVELS, ...CHAPTER_3_LEVELS]) {
+      await freshSandboxM4(level.init)
+      const state = await evaluateTargets(level)
+      const done = state.results.filter((result) => result.ok)
+      if (done.length !== 0) {
+        throw new Error(
+          `${level.id} 开局就已有 ${done.length} 项达标：` +
+            done.map((r) => `${r.target.type}（${r.detail}）`).join('、'),
+        )
+      }
+    }
+  })
+
+  it('10 关走参考解法后全部过关（含编辑器步骤与 MERGE_HEAD 合并）', async () => {
+    const { fsp } = await import('../engine/fs')
+    /** 编辑器动作：在第 N 条命令执行前写文件（before 为命令索引） */
+    type EditorAction = { before: number; path: string; content: string }
+    const plans: Record<string, { commands: string[]; edits: EditorAction[] }> = {
+      'ch2-1': {
+        commands: ['git status', 'git add .', 'git commit -m "归档待归档观测"'],
+        edits: [],
+      },
+      'ch2-2': {
+        commands: ['git add diary.md', 'git commit -m "记录修复要点"'],
+        edits: [{ before: 0, path: 'diary.md', content: '修复日记 · 定稿\n\n修复要点：时间线校准完成。\n' }],
+      },
+      'ch2-3': {
+        commands: ['git log --oneline', 'git add .', 'git commit -m "续写回溯档案"'],
+        // third.md 改写 = LOG_PAGE_THIRD + 草稿内容并入（模拟玩家把 draft.md 内容并入末尾）
+        edits: [{ before: 1, path: 'third.md', content: LOG_PAGE_THIRD + '续写草稿已并入，回溯完成。\n' }],
+      },
+      'ch2-4': {
+        commands: [
+          'git rm secrets.log',
+          'git commit -m "移除密钥残片"',
+          'git add .gitignore',
+          'git commit -m "忽略缓存噪声"',
+        ],
+        edits: [{ before: 2, path: '.gitignore', content: 'cache.log\n' }],
+      },
+      'ch3-1': {
+        commands: ['git branch dev', 'git add base.md', 'git commit -m "main 观测推进"'],
+        edits: [{ before: 1, path: 'base.md', content: UNIVERSE_BASE + '\nmain 的观测又前进一步。\n' }],
+      },
+      'ch3-2': {
+        commands: ['git checkout feature', 'git add base.md', 'git commit -m "feature 观测"'],
+        edits: [{ before: 1, path: 'base.md', content: UNIVERSE_BASE + '\nfeature 的新观测。\n' }],
+      },
+      'ch3-3': { commands: ['git merge feature'], edits: [] },
+      'ch3-4': {
+        commands: ['git merge feature', 'git add .', "git commit -m \"Merge branch 'feature' into main\""],
+        edits: [
+          {
+            before: 1,
+            path: 'beacon.md',
+            content: '信标坐标\n\n纬度：北纬 37.5\n经度：东经 105\n\n两个宇宙读数的折中，由你亲自裁决。\n',
+          },
+        ],
+      },
+      'ch3-5': { commands: ['git checkout feature', 'git rebase main'], edits: [] },
+      'ch3-6': { commands: ['git merge collaborative'], edits: [] },
+    }
+
+    for (const level of [...CHAPTER_2_LEVELS, ...CHAPTER_3_LEVELS]) {
+      await freshSandboxM4(level.init)
+      const plan = plans[level.id]
+
+      for (let i = 0; i < plan.commands.length; i += 1) {
+        // 命令前：执行到期的编辑器动作
+        for (const edit of plan.edits.filter((e) => e.before === i)) {
+          await fsp.writeFile(`/repo/${edit.path}`, edit.content, 'utf8')
+        }
+        const command = plan.commands[i]
+        const result = await execute(command)
+        if (!result.ok) {
+          throw new Error(`${level.id} 执行 ${command} 失败：${result.error ?? ''}`)
+        }
+      }
+
+      const state = await evaluateTargets(level)
+      if (!state.satisfied) {
+        const pending = state.results
+          .filter((r) => !r.ok)
+          .map((r) => `${r.target.type}：${r.detail}`)
+          .join('；')
+        throw new Error(`${level.id} 走完参考解法仍未过关：${pending}`)
+      }
+      expect(state.satisfied).toBe(true)
+    }
+  })
+
+  it('ch3-4 的合并提交确实是双亲提交（MERGE_HEAD 机制全链路）', async () => {
+    await freshSandboxM4(assertValidLevel(getLevel('ch3-4')).init)
+    const { fsp } = await import('../engine/fs')
+
+    await execute('git merge feature')
+    // 冲突已落工作区
+    const conflicted = String(await fsp.readFile('/repo/beacon.md', 'utf8'))
+    expect(conflicted).toContain('<<<<<<< main')
+
+    await fsp.writeFile(
+      '/repo/beacon.md',
+      '信标坐标\n\n纬度：北纬 37.5\n经度：东经 105\n\n两个宇宙读数的折中，由你亲自裁决。\n',
+      'utf8',
+    )
+    await execute('git add .')
+    await execute("git commit -m \"Merge branch 'feature' into main\"")
+
+    // main 的最新提交应为双亲
+    const state = await evaluateTargets(assertValidLevel(getLevel('ch3-4')))
+    expect(state.satisfied).toBe(true)
+  })
+})
+
+describe('关卡数据 —— 第二、三章 relatedKnowledge 反查', () => {
+  it('ch2/ch3 的每个 slug 都能在对应笔记里反查到真实小节', () => {
+    for (const level of [...CHAPTER_2_LEVELS, ...CHAPTER_3_LEVELS]) {
+      for (const id of level.relatedKnowledge) {
+        const { note, slug } = splitKnowledgeId(id)
+        const headings = headingsOf(note)
+        const heading = SLUG_BY_HEADING[slug]
+        const matched = heading === undefined ? [] : [[heading, slug]]
+        expect(matched.length, `${id} 的 slug 未登记`).toBeGreaterThan(0)
+        for (const [heading] of matched) {
+          expect(headings.has(heading), `${id} → "${heading}" 不在 notes/${note}.md 中`).toBe(true)
+        }
+      }
+    }
+  })
+
+  it('ch2/ch3 的 relatedKnowledge 与核定映射一致（显式期望值，防漂移）', () => {
+    const expected: Record<string, string[]> = {
+      'ch2-1': ['git-basic-operations#status'],
+      'ch2-2': ['git-basic-operations#diff'],      'ch2-3': ['git-basic-operations#log'],
+      'ch2-4': ['git-basic-operations#rm', 'git-basic-operations#ignore'],
+      'ch3-1': ['git-branches#create'],
+      'ch3-2': ['git-branches#switch'],
+      'ch3-3': ['git-branches#basic-merge'],
+      'ch3-4': ['git-branches#merge-conflict'],
+      'ch3-5': ['git-branches#rebase-vs-merge'],
+      'ch3-6': ['git-branches#best-practices'],
+    }
+    for (const level of [...CHAPTER_2_LEVELS, ...CHAPTER_3_LEVELS]) {
+      expect(level.relatedKnowledge).toEqual(expected[level.id])
     }
   })
 })

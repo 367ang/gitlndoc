@@ -9,20 +9,30 @@
  *   - 一切 git 操作都经 `gitApi.*`，本层不直接触碰 fs / isomorphic-git；
  *   - 返回结构刻意贴近 `CommandEntry`（§4.4），UI 只需补 id / input / tokens / ts。
  *
- * ⚠️ 关于「undoable」：§6.2 规定撤销类命令（reset / revert / checkout --）才记
- * `undoable`，且这些命令全部属 M4/M5，在 M1 子集之外。故 M1 恒为 false ——
- * 保留该字段是为了 M5 接入时 UI 与评分无需改签名。
+ * ⚠️ 关于「undoable」：§6.2 规定撤销类命令（reset / revert / checkout -- / stash drop）才记
+ * `undoable`。M4 的分支命令（branch / checkout <branch> / switch / merge / rebase / rm）
+ * **不属于撤销类**（§7.2 字面清单只含上述四者；分支操作是「前进」而非「回退」），
+ * 故仍恒为 false。3-5 变基关的评分依赖 optimalMoves（参考命令数），不依赖撤销罚分 ——
+ * 实现处注释留档，M5 引入真正的撤销命令时再接线。
  *
- * ⚠️ M1 只处理自由输入（`free`）。半拼模式的残缺 token 高亮属 M4，不在本层实现。
+ * ⚠️ M1 只处理自由输入（`free`）。半拼模式的残缺 token 高亮属 M4，在 fragments/CommandBuilder 层实现。
  */
 
 import type { CommandEntry } from '../types';
 import {
   add as gitAdd,
+  branch as gitBranch,
+  checkout as gitCheckout,
   commit as gitCommit,
+  diff as gitDiff,
   init as gitInit,
+  listBranches as gitListBranches,
   log as gitLog,
+  logAll as gitLogAll,
+  merge as gitMerge,
+  rebase as gitRebase,
   remove as gitRemove,
+  removePaths as gitRemovePaths,
   status as gitStatus,
   unsupported,
   type CommitEntry,
@@ -311,12 +321,12 @@ export async function execute(input: string, options: ExecuteOptions = {}): Prom
       }
 
       const message = command.message ?? '';
-      return unwrap(await gitCommit(message, repoOptions), tokens, (hash) => {
-        const shortHash = hash.slice(0, 7);
-        const branch = 'main';
-        // 对齐真 git 的 commit 回显格式
+      return unwrap(await gitCommit(message, repoOptions), tokens, (result) => {
+        const shortHash = result.hash.slice(0, 7);
+        // 对齐真 git 的 commit 回显格式；分支名 M4 起真实读取（M1 曾硬编码 main，
+        // 分支关卡里会显示错误分支 —— M4 的 GitGraph/BranchPanel 都依赖真实分支语义）
         return succeed(tokens, [
-          `[${branch} ${shortHash}] ${message.split('\n')[0]}`,
+          `[${result.branch} ${shortHash}] ${message.split('\n')[0]}`,
         ]);
       });
     }
@@ -326,10 +336,113 @@ export async function execute(input: string, options: ExecuteOptions = {}): Prom
         succeed(tokens, renderStatus(summary, command.short)),
       );
 
-    case 'log':
-      return unwrap(await gitLog(repoOptions), tokens, (commits) => {
+    case 'log': {
+      const logResult = command.all ? await gitLogAll(repoOptions) : await gitLog(repoOptions);
+      return unwrap(logResult, tokens, (commits) => {
         const limited = command.maxCount === undefined ? commits : commits.slice(0, command.maxCount);
         return succeed(tokens, renderLog(limited, command.oneline, command.reverse));
+      });
+    }
+
+    case 'branch': {
+      if (command.name === undefined) {
+        // `git branch` 无参数：列出本地分支（对齐真 git 输出：`* ` 标记当前分支）
+        return unwrap(await gitListBranches(repoOptions), tokens, (branches) => {
+          const output = branches.map((entry) => `${entry.current ? '* ' : '  '}${entry.name}`);
+          if (output.length === 0) output.push('（还没有任何分支）');
+          return succeed(tokens, output);
+        });
+      }
+      return unwrap(await gitBranch(command.name, repoOptions), tokens, (result) =>
+        succeed(tokens, [result.from === undefined ? `已创建分支 ${result.name}` : `已创建分支 ${result.name}（指向 ${result.from}）`]),
+      );
+    }
+
+    case 'checkout': {
+      if (command.create) {
+        // `checkout -b <name>` = 创建并切换；复用 branch + checkout 组合
+        const created = await gitBranch(command.branch, repoOptions);
+        if (!created.ok) return failWith(tokens, renderError(created.error));
+      }
+      return unwrap(await gitCheckout(command.branch, repoOptions), tokens, (result) =>
+        succeed(tokens, [
+          command.create
+            ? `已切换到一个新分支「${result.branch}」`
+            : `已切换到分支「${result.branch}」`,
+        ]),
+      );
+    }
+
+    case 'switch': {
+      if (command.create) {
+        const created = await gitBranch(command.branch, repoOptions);
+        if (!created.ok) return failWith(tokens, renderError(created.error));
+      }
+      return unwrap(await gitCheckout(command.branch, repoOptions), tokens, (result) =>
+        succeed(tokens, [
+          command.create
+            ? `已切换到一个新分支「${result.branch}」`
+            : `已切换到分支「${result.branch}」`,
+        ]),
+      );
+    }
+
+    case 'merge': {
+      const merged = await gitMerge(command.branch, repoOptions);
+      if (!merged.ok) return failWith(tokens, renderError(merged.error));
+
+      const result = merged.value;
+      if ('conflicted' in result) {
+        // 冲突：GitCommandError 文案 + 冲突文件清单（真 git 的输出格式）
+        const lines = [
+          `自动合并失败 —— 以下文件存在冲突，需要手动解决：`,
+          ...result.conflictedPaths.map((path) => `\t${path}`),
+          '冲突标记（<<<<<<< / ======= / >>>>>>>）已写入这些文件。解决后执行 git add <文件>，再 git commit 完成合并。',
+        ];
+        return succeed(tokens, lines);
+      }
+      if (result.mergeCommit) {
+        return succeed(tokens, [`已合并 ${command.branch}（生成合并提交 ${result.hash.slice(0, 7)}）`]);
+      }
+      if (result.fastForward) {
+        return succeed(tokens, [`正在更新 ${command.branch}..HEAD 以快进合并（Fast-forward）`]);
+      }
+      return succeed(tokens, ['已经是最新的（Already up to date.）']);
+    }
+
+    case 'rebase':
+      return unwrap(await gitRebase(command.upstream, repoOptions), tokens, (result) => {
+        if (result.count === 0) {
+          return succeed(tokens, ['当前分支已经是最新的（无需变基）。']);
+        }
+        return succeed(tokens, [
+          `成功把 ${result.count} 个提交变基到 ${command.upstream} 之上，并切换到分支「${result.branch}」。`,
+        ]);
+      });
+
+    case 'rm': {
+      if (command.cached) {
+        // `--cached`：只从索引移除（M1 的 gitApi.remove 即此语义），工作区文件保留
+        return unwrap(await gitRemove(command.paths, repoOptions), tokens, () =>
+          succeed(tokens, command.paths.map((path) => `已从暂存区移除 ${path}（工作区文件保留）`)),
+        );
+      }
+      return unwrap(await gitRemovePaths(command.paths, repoOptions), tokens, (removed) =>
+        succeed(tokens, removed.map((path) => `已移除 ${path}`)),
+      );
+    }
+
+    case 'diff':
+      return unwrap(await gitDiff({ ...repoOptions, staged: command.staged }), tokens, (entries) => {
+        if (entries.length === 0) {
+          return succeed(tokens, [command.staged ? '暂存区与最近一次快照一致，没有差异。' : '工作区与暂存区一致，没有未暂存的改动。']);
+        }
+        const lines: string[] = [];
+        for (const entry of entries) {
+          lines.push(`diff --git a/${entry.path} b/${entry.path}`);
+          for (const line of entry.lines) lines.push(line);
+        }
+        return succeed(tokens, lines);
       });
 
     default:

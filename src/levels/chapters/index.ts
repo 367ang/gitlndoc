@@ -5,13 +5,15 @@
  * 不含任何判定/计分逻辑（那些在 `game/validate/` 与 M3 的 `game/scoring/`）。
  * UI 只经此处取关卡，不直接 import 具体章节文件 —— 这样新增章节时 UI 无需改动。
  *
- * ⚠️ 当前只注册了第一章。ch2~ch6 与综合挑战 F 属 M4/M5/M6（§13），
- * 尚未落地时**不注册**，`getChapterLevels('ch3')` 会如实返回空数组 ——
+ * ⚠️ 当前注册了 ch1~ch3（M4）。ch4~ch6 与综合挑战 F 属 M5/M6（§13），
+ * 尚未落地时**不注册**，`getChapterLevels('ch4')` 会如实返回空数组 ——
  * 不伪造占位关卡（§14）。
  */
 
 import type { ChapterId, Level } from '../../game/types';
 import { CHAPTER_1_LEVELS } from './ch1';
+import { CHAPTER_2_LEVELS } from './ch2';
+import { CHAPTER_3_LEVELS } from './ch3';
 
 /** 章节元信息，供菜单/章节页渲染（§9.1） */
 export interface ChapterMeta {
@@ -39,14 +41,14 @@ export const CHAPTERS: readonly ChapterMeta[] = [
     order: 2,
     title: '日常秩序',
     subtitle: 'Git 基础操作 —— status / diff / log / rm',
-    playable: false,
+    playable: true,
   },
   {
     id: 'ch3',
     order: 3,
     title: '平行宇宙',
     subtitle: 'Git 分支管理 —— branch / checkout / merge',
-    playable: false,
+    playable: true,
   },
   {
     id: 'ch4',
@@ -81,8 +83,8 @@ export const CHAPTERS: readonly ChapterMeta[] = [
 /** 章节 → 关卡列表。未实现的章节显式登记为空数组，让「无关卡」是**已知事实**而非漏注册 */
 const LEVELS_BY_CHAPTER: Record<ChapterId, readonly Level[]> = {
   ch1: CHAPTER_1_LEVELS,
-  ch2: [],
-  ch3: [],
+  ch2: CHAPTER_2_LEVELS,
+  ch3: CHAPTER_3_LEVELS,
   ch4: [],
   ch5: [],
   ch6: [],

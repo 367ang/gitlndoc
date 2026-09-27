@@ -27,6 +27,19 @@ export interface InitCommit {
   date: string
   msg: string
   message: string
+  /**
+   * 该提交落在哪个分支上（M4，服务第 3 章的分支化预置）：
+   *   - 首次出现：从当前 HEAD 创建该分支并切换过去，提交落在新分支；
+   *   - 再次出现：仅切换回去，继续在既有分支上提交。
+   * 缺省 = 沿用当前分支（等价于 ch1 的单线历史）。
+   */
+  on?: string
+  /**
+   * 本次提交前写入工作区并暂存的文件（相对 `/repo` 的路径 → 内容）。
+   * 与 `LevelInit.files`（进关即写入、不自动入库）不同，这里的文件**进入该次提交**。
+   * 典型用途：3-4 冲突预置 —— 同一文件在两个分支上写入不同内容。
+   */
+  files?: Record<string, string>
 }
 
 /** 关卡初始化：清空虚拟根后据此重建沙箱仓库（§4.2） */
@@ -75,6 +88,11 @@ export interface Level {
   /** 参考解法的成功命令数（§7.3 optimalBonus 判据：与参考一致或更短） */
   optimalMoves: number
   hints: HintStep[] // 分步提示（按失败次数解锁）
+  /**
+   * 半拼模式的骨架命令（M4，仅 inputMode: 'half' 关卡提供，如 `'git merge'`）。
+   * 进关时预填进拼接草稿，玩家在其上补参数（GDD §3.2「命令骨架 + 关键参数填空」）。
+   */
+  halfSkeleton?: string
   timeoutMs?: number // 可选倒计时（默认不限时）
 }
 

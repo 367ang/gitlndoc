@@ -29,7 +29,12 @@ import { PROBE_BONUS_MAX_EVENTS } from '../types';
  * `status` / `log` 属 M1 已支持；`branch` 属 M4 —— 提前列入名单，
  * M4 落地后无需改计分层。`git log` 只计**裸调用**（带 -n 等参数同样算探查）。
  */
-const PROBE_VERBS: readonly string[] = ['status', 'log', 'branch'];
+/**
+ * probeBonus 计数的只读探查命令（§7.3「探索性只读命令」）。
+ * M4 起补入 `diff` 与 `branch`（第二章只读关卡首次真实触发本奖励）。
+ * `git log` 只计**裸调用**（带 -n 等参数同样算探查）。
+ */
+const PROBE_VERBS: readonly string[] = ['status', 'log', 'branch', 'diff'];
 
 /** 一条命令的 verb（`git status --short` → `status`）；非 git 命令返回 null */
 function verbOf(entry: CommandEntry): string | null {

@@ -33,9 +33,9 @@ const SCORING_KEYS: readonly (keyof ScoringParams)[] = [
 /**
  * §4.3 中**已实现判定逻辑**的 `TargetCondition` 类型。
  *
- * ⚠️ 这是「实现进度」的事实来源：`src/game/validate/targetState.ts` 只处理这 5 种，
- * 其余 6 种由 `UNIMPLEMENTED_TARGET_TYPES` 列出并明确报「尚未实现」。
- * 两处名单必须同步 —— 由 `levels.test.ts` 断言「本文件所列 5 种 == targetState 已实现 5 种」。
+ * ⚠️ 这是「实现进度」的事实来源：`src/game/validate/targetState.ts` 处理这 9 种，
+ * 其余 2 种由 `UNIMPLEMENTED_TARGET_TYPES` 列出并明确报「尚未实现」。
+ * 两处名单必须同步 —— 由 `levels.test.ts` 断言两份名单互补且与 targetState 一致。
  */
 export const IMPLEMENTED_TARGET_TYPES: readonly TargetCondition['type'][] = [
   'file',
@@ -43,15 +43,16 @@ export const IMPLEMENTED_TARGET_TYPES: readonly TargetCondition['type'][] = [
   'commitMessage',
   'commitExists',
   'workdirClean',
-] as const;
-
-/** §4.3 中尚未实现判定逻辑的类型（对应章节属 M4/M5） */
-export const UNIMPLEMENTED_TARGET_TYPES: readonly TargetCondition['type'][] = [
+  // M4（第 3 章分支关卡）
   'branch',
   'headBranch',
-  'tag',
   'merged',
   'logOrder',
+] as const;
+
+/** §4.3 中尚未实现判定逻辑的类型（对应章节属 M5/M6） */
+export const UNIMPLEMENTED_TARGET_TYPES: readonly TargetCondition['type'][] = [
+  'tag',
   'remote',
 ] as const;
 
@@ -177,13 +178,18 @@ function validateHints(hints: unknown, collector: ErrorCollector): void {
 }
 
 /**
- * 校验 `init`：只允许 M1 已落地的 `files` / `commits`，
+ * 校验 `init`：允许 `files` / `commits` / `branches`（M4 起已落地），
  * 以及语义等价的 `template: 'blank' | 'emptyRepo'`。
  *
- * ⚠️ `branches` / `tags` / `remotes` / `template: 'cloneSource'` 会在
- * `sandbox.reset()` 处 **fail-fast 报错**（M1 刻意不伪造，见 M1-tasks-DONE「实测环境事实」）。
+ * ⚠️ `tags` / `remotes` / `template: 'cloneSource'` 会在
+ * `sandbox.reset()` 处 **fail-fast 报错**（刻意不伪造，见 M1-tasks-DONE「实测环境事实」）。
  * 若把关卡写坏了要等到玩家进关才炸，体验很差 —— 故这里在校验期就拦下，
  * 并给出与 sandbox 同一口径的说明。
+ *
+ * M4 校验细则：
+ *   - `branches`：name 非空且不以 `-` 开头；`from` 可选、非空字符串；
+ *   - `commits[].on`：可选分支名，同上；`commits[].files`：与 `init.files` 同规则
+ *     （非空路径 → 字符串内容）。
  */
 function validateInit(init: unknown, collector: ErrorCollector): void {
   if (typeof init !== 'object' || init === null) {
@@ -196,31 +202,55 @@ function validateInit(init: unknown, collector: ErrorCollector): void {
   if (template !== undefined && template !== 'blank' && template !== 'emptyRepo') {
     collector.add(
       'init.template',
-      `"${String(template)}" 不可用；M2 仅支持 'blank' 与 'emptyRepo'（'cloneSource' 属 M5）。`,
+      `"${String(template)}" 不可用；当前支持 'blank' 与 'emptyRepo'（'cloneSource' 属 M5）。`,
     );
   }
 
   // sandbox.reset() 的 fail-fast 名单，此处提前拦截
   const deferred: string[] = [];
-  if (Array.isArray(branches) && branches.length > 0) deferred.push('branches');
   if (Array.isArray(tags) && tags.length > 0) deferred.push('tags');
   if (Array.isArray(remotes) && remotes.length > 0) deferred.push('remotes');
   if (deferred.length > 0) {
     collector.add(
       'init',
-      `${deferred.join(' / ')} 尚未落地（属 M4/M5），sandbox.reset() 会 fail-fast 拒绝执行。`,
+      `${deferred.join(' / ')} 尚未落地（属 M5/M6），sandbox.reset() 会 fail-fast 拒绝执行。`,
     );
   }
 
-  if (files !== undefined) {
-    if (typeof files !== 'object' || files === null || Array.isArray(files)) {
-      collector.add('init.files', '必须是「路径 → 内容」的对象。');
+  if (branches !== undefined) {
+    if (!Array.isArray(branches)) {
+      collector.add('init.branches', '必须是数组（可为空）。');
     } else {
-      for (const [path, content] of Object.entries(files)) {
-        if (!isNonEmptyString(path)) collector.add('init.files', '存在空路径。');
-        if (typeof content !== 'string') collector.add(`init.files["${path}"]`, '文件内容必须是字符串。');
-      }
+      branches.forEach((entry: unknown, index) => {
+        const path = `init.branches[${index}]`;
+        if (typeof entry !== 'object' || entry === null) {
+          collector.add(path, '必须是 { name, from? } 对象。');
+          return;
+        }
+        const { name, from } = entry as { name?: unknown; from?: unknown };
+        if (typeof name !== 'string' || name.trim().length === 0 || name.startsWith('-')) {
+          collector.add(`${path}.name`, '必须是非空且不以 - 开头的分支名。');
+        }
+        if (from !== undefined && (typeof from !== 'string' || from.trim().length === 0)) {
+          collector.add(`${path}.from`, '若提供，必须是非空字符串（起点分支名）。');
+        }
+      });
     }
+  }
+
+  const validateFileMap = (value: unknown, path: string): void => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      collector.add(path, '必须是「路径 → 内容」的对象。');
+      return;
+    }
+    for (const [p, content] of Object.entries(value as Record<string, unknown>)) {
+      if (!isNonEmptyString(p)) collector.add(path, '存在空路径。');
+      if (typeof content !== 'string') collector.add(`${path}["${p}"]`, '文件内容必须是字符串。');
+    }
+  };
+
+  if (files !== undefined) {
+    validateFileMap(files, 'init.files');
   }
 
   if (commits !== undefined) {
@@ -233,10 +263,21 @@ function validateInit(init: unknown, collector: ErrorCollector): void {
           collector.add(path, '必须是 InitCommit 对象。');
           return;
         }
-        const { msg, message } = commit as { msg?: unknown; message?: unknown };
+        const { msg, message, on, files: commitFiles } = commit as {
+          msg?: unknown;
+          message?: unknown;
+          on?: unknown;
+          files?: unknown;
+        };
         // sandbox 取 `message || msg`，两者都空会让提交信息为空字符串
         if (!isNonEmptyString(message) && !isNonEmptyString(msg)) {
           collector.add(path, 'message（或 msg）必须是非空字符串。');
+        }
+        if (on !== undefined && (typeof on !== 'string' || on.trim().length === 0 || on.startsWith('-'))) {
+          collector.add(`${path}.on`, '若提供，必须是非空且不以 - 开头的分支名。');
+        }
+        if (commitFiles !== undefined) {
+          validateFileMap(commitFiles, `${path}.files`);
         }
       });
     }
@@ -309,6 +350,18 @@ export function validateLevel(input: unknown): ValidationResult {
   }
   validateScoring(raw.scoring, collector);
   validateTimeout(raw.timeoutMs, collector);
+
+  // halfSkeleton（M4）：半拼关卡必须提供骨架，且骨架须以 git 起头（拼接模型的前提）；
+  // 非半拼关卡若提供则视为数据冗余 —— 同样拦截，避免两种输入模型界限含糊。
+  if (raw.inputMode === 'half') {
+    if (!isNonEmptyString(raw.halfSkeleton)) {
+      collector.add('halfSkeleton', '半拼关卡必须提供骨架命令（如 "git merge"）。');
+    } else if (!raw.halfSkeleton.startsWith('git ') || raw.halfSkeleton.trim().split(/\s+/).length < 2) {
+      collector.add('halfSkeleton', '骨架必须是「git <子命令>」形式的完整前缀。');
+    }
+  } else if (raw.halfSkeleton !== undefined) {
+    collector.add('halfSkeleton', '仅半拼（half）关卡可提供骨架命令。');
+  }
 
   if (collector.errors.length > 0) return { ok: false, errors: collector.errors };
   return { ok: true, level: input as Level, errors: [] };

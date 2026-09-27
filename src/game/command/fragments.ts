@@ -93,11 +93,26 @@ function fragment(command: string, slot: number, text: string, label: string): F
  * `Draft.slots` 记录的是**片段对象**（含 `command` 字段），不是文本，
  * 因此渲染与替换都能正确区分。切换命令组时 `git` 作为公共前缀被保留。
  */
-const FIRST_CHAPTER: Fragment[] = [
-  // slot 0：起始词。三个组共享同一文本，但在 Draft 里是各自独立的片段对象
+const COMMON_GIT_SLOT: Fragment[] = [
+  // slot 0：起始词。各命令组共享同一文本，但在 Draft 里是各自独立的片段对象。
+  // ⚠️ 必须覆盖 ch1~ch3 全部命令组 —— draftFromSkeleton 靠「slot0 + slot1 同命令」
+  // 锁定命令组；缺组的 slot0 会让该命令的骨架预填失败（实测：merge/rebase 等）。
   fragment('git init', 0, 'git', 'git'),
   fragment('git add', 0, 'git', 'git'),
   fragment('git commit', 0, 'git', 'git'),
+  fragment('git status', 0, 'git', 'git'),
+  fragment('git diff', 0, 'git', 'git'),
+  fragment('git log', 0, 'git', 'git'),
+  fragment('git rm', 0, 'git', 'git'),
+  fragment('git branch', 0, 'git', 'git'),
+  fragment('git checkout', 0, 'git', 'git'),
+  fragment('git switch', 0, 'git', 'git'),
+  fragment('git merge', 0, 'git', 'git'),
+  fragment('git rebase', 0, 'git', 'git'),
+]
+
+const FIRST_CHAPTER: Fragment[] = [
+  ...COMMON_GIT_SLOT,
   // slot 1：子命令（唯一，不与 slot 0 重复）
   fragment('git init', 1, 'init', 'init'),
   fragment('git add', 1, 'add', 'add'),
@@ -107,8 +122,56 @@ const FIRST_CHAPTER: Fragment[] = [
   fragment('git commit', 2, '-m', '-m'),
 ]
 
-/** 通用片段（M2 尚未按关卡拆分时的默认清单） */
+/**
+ * 第二章片段表（M4）：status / diff / log / rm / .gitignore 相关。
+ * 命令集与 GDD §4 第二章一致；拼接输入（用户裁定 M4 开工前确认）。
+ * 槽位不重叠约束继续成立；`.gitignore` 的「创建」走文件编辑器而非命令。
+ */
+const SECOND_CHAPTER: Fragment[] = [
+  ...COMMON_GIT_SLOT,
+  fragment('git status', 1, 'status', 'status'),
+  fragment('git diff', 1, 'diff', 'diff'),
+  fragment('git log', 1, 'log', 'log'),
+  fragment('git rm', 1, 'rm', 'rm'),
+  fragment('git add', 1, 'add', 'add'),
+  fragment('git commit', 1, 'commit', 'commit'),
+  fragment('git status', 2, '-s', '-s'),
+  fragment('git diff', 2, '--staged', '--staged'),
+  fragment('git log', 2, '--oneline', '--oneline'),
+  fragment('git log', 2, '--all', '--all'),
+  fragment('git rm', 2, '--cached', '--cached'),
+  fragment('git add', 2, '.', '.'),
+  fragment('git commit', 2, '-m', '-m'),
+]
+
+/**
+ * 第三章片段表（M4）：branch / checkout / switch / merge / rebase。
+ * 半拼关卡的骨架会预填部分槽位，玩家在其上补参数。
+ */
+const THIRD_CHAPTER: Fragment[] = [
+  ...COMMON_GIT_SLOT,
+  fragment('git branch', 1, 'branch', 'branch'),
+  fragment('git checkout', 1, 'checkout', 'checkout'),
+  fragment('git switch', 1, 'switch', 'switch'),
+  fragment('git merge', 1, 'merge', 'merge'),
+  fragment('git add', 1, 'add', 'add'),
+  fragment('git commit', 1, 'commit', 'commit'),
+  fragment('git rebase', 1, 'rebase', 'rebase'),
+  fragment('git checkout', 2, '-b', '-b'),
+  fragment('git switch', 2, '-c', '-c'),
+  fragment('git add', 2, '.', '.'),
+  fragment('git commit', 2, '-m', '-m'),
+]
+
+/** 通用片段（按章节选表前的默认清单；ch1 专用内容） */
 export const COMMON_FRAGMENTS: Fragment[] = FIRST_CHAPTER
+
+/** 各章节的片段表（M4 起按 `level.chapter` 选取；§3.2 输入方式随章节演进） */
+const FRAGMENTS_BY_CHAPTER: Partial<Record<Level['chapter'], Fragment[]>> = {
+  ch1: FIRST_CHAPTER,
+  ch2: SECOND_CHAPTER,
+  ch3: THIRD_CHAPTER,
+}
 
 /**
  * 从关卡数据里推导出「玩家可能要拼的路径片段」。
@@ -141,7 +204,60 @@ export function pathsFromLevel(level: Level): Fragment[] {
 
 /** 关卡可用的完整片段清单：通用片段 + 该关卡涉及的路径 */
 export function fragmentsForLevel(level: Level): Fragment[] {
-  return [...FIRST_CHAPTER, ...pathsFromLevel(level)]
+  // ⚠️ 半拼模式（half）没有专属片段表 —— 骨架预填走 CommandBuilder 的骨架路径，
+  // 片段池沿用该章的通用表（第三章 = THIRD_CHAPTER），骨架命令必然能在池中找到。
+  const chapterTable = FRAGMENTS_BY_CHAPTER[level.chapter] ?? FIRST_CHAPTER
+  return [...chapterTable, ...pathsFromLevel(level)]
+}
+
+/**
+ * 从半拼骨架生成初始草稿（M4，inputMode: 'half'）。
+ *
+ * 骨架（如 `git merge`）被拆成 token 序列，逐个在片段池里找「同命令且文本匹配」的
+ * 片段填入槽位 —— 骨架因此走的是**既有槽位模型**，而不是另造一套预填逻辑；
+ * `isFragmentEnabled` 的置灰闸门、`applyFragment` 的替换语义对骨架继续成立。
+ * 找不到对应片段的 token（理论上是数据错误）被跳过并交由调用方断言。
+ */
+export function draftFromSkeleton(skeleton: string, pool: readonly Fragment[]): Draft {
+  const tokens = skeleton.trim().split(/\s+/).filter((token) => token.length > 0);
+  const slots: (Fragment | undefined)[] = [];
+
+  if (tokens.length === 0) return { slots };
+
+  // 骨架 token 1（恒为 'git'）：在「拥有 token 2 片段的命令组」里找 slot 0 ——
+  // 三个组的 slot 0 文本相同，必须用第二个 token 决定命令组，否则会错锁到第一组（实测缺陷）。
+  // 只有 'git' 一个 token 的骨架属于数据错误（骨架必须含子命令，schema 已拦），填空草稿。
+  const verbToken = tokens[1];
+  if (verbToken === undefined) return { slots };
+
+  const verbFragment = pool.find(
+    (fragment) => fragment.slot === 1 && fragment.text === verbToken,
+  );
+  if (!verbFragment) return { slots };
+
+  const gitFragment = pool.find(
+    (fragment) => fragment.command === verbFragment.command && fragment.slot === 0 && fragment.text === tokens[0],
+  );
+  if (!gitFragment) return { slots };
+
+  slots[gitFragment.slot] = gitFragment;
+  slots[verbFragment.slot] = verbFragment;
+
+  // 更长的骨架（M4 未用，保留扩展位）：token 3 起依次匹配同命令的更高槽位
+  for (let i = 2; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    const match = pool.find(
+      (fragment) =>
+        fragment.command === verbFragment.command &&
+        fragment.text === token &&
+        slots[fragment.slot] === undefined &&
+        slots.slice(0, fragment.slot).every((slot) => slot !== undefined),
+    );
+    if (!match) break;
+    slots[match.slot] = match;
+  }
+
+  return { slots };
 }
 
 /**

@@ -16,7 +16,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { executeToEntry } from '../../../game/command/executor'
-import { fragmentsForLevel } from '../../../game/command/fragments'
+import { draftFromSkeleton, fragmentsForLevel } from '../../../game/command/fragments'
 import { stillMissingHint } from '../../../game/validate/stillMissingHint'
 import { getUnlockedHints } from '../../../game/validate/stepHints'
 import { evaluateScore } from '../../../game/scoring/score'
@@ -24,14 +24,15 @@ import { getChapterMeta } from '../../../levels/chapters'
 import { useSessionStore } from '../../../store/sessionStore'
 import { useViewStore } from '../../../store/viewStore'
 import { CommandHistory } from '../history/CommandHistory'
-import { CommitPanel } from '../gitGraph/CommitPanel'
+import { BranchPanel } from '../gitGraph/BranchPanel'
+import { GitGraph } from '../gitGraph/GitGraph'
 import { FileTree } from '../fileTree/FileTree'
 import { GoalPanel } from '../goalPanel/GoalPanel'
 import { HintsPanel } from './HintsPanel'
 import { CommandBuilder } from '../terminal/CommandBuilder'
 import { Terminal } from '../terminal/Terminal'
 import { useFileTree } from '../fileTree/useFileTree'
-import { useCommitHistory } from '../../hooks/useCommitHistory'
+import { useCompletionCandidates } from '../../hooks/useCompletionCandidates'
 import { useTargetState } from '../../hooks/useTargetState'
 import styles from './LevelScreen.module.css'
 
@@ -53,16 +54,35 @@ export function LevelScreen() {
   const [failures, setFailures] = useState(0)
 
   const tree = useFileTree(version)
-  const commits = useCommitHistory()
   const targets = useTargetState(version)
+  const completion = useCompletionCandidates(version)
+
+  // Tab 补全候选（M4）：白名单在 completion.ts 内置，动态候选 = 分支名 + 文件路径
+  const completionCandidates = useMemo(
+    () => [...completion.branches, ...completion.paths],
+    [completion.branches, completion.paths],
+  )
 
   const isMenuMode = level?.inputMode === 'menu'
+  const isHalfMode = level?.inputMode === 'half'
 
   // 命令片段清单只由关卡决定（随关卡变化而变化），故用 level 派生而非存进 store
-  const fragments = useMemo(() => (level === null || !isMenuMode ? [] : fragmentsForLevel(level)), [
-    level,
-    isMenuMode,
-  ])
+  const fragments = useMemo(
+    () => (level === null || level.inputMode === 'free' ? [] : fragmentsForLevel(level)),
+    [level],
+  )
+
+  // 半拼骨架（M4）：进关时预填进草稿 —— 走既有槽位模型（draftFromSkeleton），
+  // 不另造预填逻辑；骨架变化（换关）时重置草稿。
+  // ⚠️ 依赖数组只含 level.id：骨架由关卡数据决定，同一关内不重复预填
+  // （否则玩家清空草稿后骨架会「复活」，无法从零开始拼）。
+  useEffect(() => {
+    if (level === null || !isHalfMode) return
+    const pool = fragmentsForLevel(level)
+    resetDraft()
+    setDraft(draftFromSkeleton(level.halfSkeleton ?? '', pool))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在换关时执行一次，见上注释
+  }, [level?.id, isHalfMode])
 
   // 分步提示状态：按失败次数派生（纯函数，每渲染重算代价可忽略）
   const hints = useMemo(
@@ -123,6 +143,11 @@ export function LevelScreen() {
     resetDraft()
     handleExecuted(ok)
   }
+
+  /** 文件编辑器保存成功：制造了真实的工作区改动 → 刷新 version（目标检测/文件树/提交图联动） */
+  const handleFileSaved = useCallback(() => {
+    setVersion((value) => value + 1)
+  }, [])
 
   const chapterTitle = level === null ? null : (getChapterMeta(level.chapter)?.title ?? level.chapter)
 
@@ -188,23 +213,30 @@ export function LevelScreen() {
           <div className={styles.terminalBlock}>
             <h2 className={styles.panelTitle}>终端</h2>
             <CommandHistory history={history} />
-            {isMenuMode ? (
+            {isMenuMode || isHalfMode ? (
               <CommandBuilder
                 fragments={fragments}
                 draft={draft}
                 onChange={setDraft}
                 onRun={(command) => void runCommand(command)}
                 busy={false}
+                completionCandidates={completionCandidates}
               />
             ) : (
-              <Terminal onExecuted={handleExecuted} />
+              <Terminal onExecuted={handleExecuted} completionCandidates={completionCandidates} />
             )}
           </div>
         </section>
 
         <aside className={styles.side}>
-          <FileTree nodes={tree.tree} branch={tree.branch} loading={tree.loading} />
-          <CommitPanel commits={commits} />
+          <FileTree
+            nodes={tree.tree}
+            branch={tree.branch}
+            loading={tree.loading}
+            onFileSaved={handleFileSaved}
+          />
+          <GitGraph version={version} />
+          <BranchPanel version={version} />
         </aside>
       </div>
     </main>

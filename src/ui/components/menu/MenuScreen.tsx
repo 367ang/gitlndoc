@@ -16,6 +16,7 @@ import { startLevel } from '../../../app/startLevel'
 import { useProgressStore } from '../../../store/progressStore'
 import { useViewStore } from '../../../store/viewStore'
 import { ACHIEVEMENTS } from '../../../game/scoring/achievements'
+import { isChapterUnlocked } from '../../../game/progression'
 import styles from './MenuScreen.module.css'
 
 /** 星级显示：★ 实心 / ☆ 空心；0 星显示「—」 */
@@ -109,9 +110,11 @@ export function MenuScreen() {
           // 章节小计：已通关数与总星（M3 展示，无记录时显示 —）
           const chapterStars = levels.reduce((sum, level) => sum + (levelRecords[level.id]?.stars ?? 0), 0)
           const chapterCleared = levels.filter((level) => levelRecords[level.id]?.cleared === true).length
+          // M4 章节解锁：通关上一章全部关卡后解锁（规则在 game/progression.ts，纯派生）
+          const unlocked = isChapterUnlocked(chapter.id, levelRecords)
 
           return (
-            <li key={chapter.id} className={styles.chapter} data-playable={chapter.playable}>
+            <li key={chapter.id} className={styles.chapter} data-playable={chapter.playable && unlocked}>
               <div className={styles.chapterText}>
                 <h2 className={styles.chapterTitle}>
                   <span className={styles.chapterId}>{chapter.id}</span>
@@ -119,10 +122,12 @@ export function MenuScreen() {
                 </h2>
                 <p className={styles.chapterDesc}>{chapter.subtitle}</p>
                 <p className={styles.chapterMeta}>
-                  {/* 未实现的章节（M4–M6）如实说明，不让玩家点进去发现是空的（§14 不伪造） */}
-                  {chapter.playable
-                    ? `${levels.length} 个关卡 · 通关 ${chapterCleared}/${levels.length} · 星 ${chapterStars}/${levels.length * 3}`
-                    : '尚未开放 · 后续里程碑'}
+                  {/* 未实现的章节（M5–M6）如实说明；已实现但未解锁的给出解锁条件（§14 不伪造） */}
+                  {!chapter.playable
+                    ? '尚未开放 · 后续里程碑'
+                    : !unlocked
+                      ? '🔒 完成上一章全部关卡后解锁'
+                      : `${levels.length} 个关卡 · 通关 ${chapterCleared}/${levels.length} · 星 ${chapterStars}/${levels.length * 3}`}
                 </p>
               </div>
 
@@ -131,6 +136,7 @@ export function MenuScreen() {
                   className={styles.secondary}
                   type="button"
                   onClick={() => goChapter(chapter.id)}
+                  disabled={!unlocked}
                   aria-label={`查看章节 ${chapter.id} ${chapter.title}`}
                 >
                   章节详情
@@ -140,7 +146,7 @@ export function MenuScreen() {
                     className={styles.primary}
                     type="button"
                     onClick={() => void handleStart(first.id)}
-                    disabled={starting !== null}
+                    disabled={starting !== null || !unlocked}
                     aria-label={`直接开始 ${first.id} ${first.title}`}
                   >
                     {starting === first.id ? '校准中…' : `开始 ${first.id}`}

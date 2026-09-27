@@ -23,6 +23,7 @@ import {
   type Draft,
   type Fragment,
 } from '../../../game/command/fragments'
+import { completeAtEnd } from '../../../game/command/completion'
 import styles from './CommandBuilder.module.css'
 
 export interface CommandBuilderProps {
@@ -36,9 +37,18 @@ export interface CommandBuilderProps {
   onRun: (command: string) => void
   /** 是否正在执行 */
   busy: boolean
+  /** Tab 补全候选（分支名 / 文件路径，M4）；白名单在 completion.ts 内置 */
+  completionCandidates?: readonly string[]
 }
 
-export function CommandBuilder({ fragments, draft, onChange, onRun, busy }: CommandBuilderProps) {
+export function CommandBuilder({
+  fragments,
+  draft,
+  onChange,
+  onRun,
+  busy,
+  completionCandidates = [],
+}: CommandBuilderProps) {
   const command = renderDraft(draft)
   // 片段拼出来的部分（只读展示）；玩家手写的后缀另算，见下方输入框
   const built = renderDraft({ slots: draft.slots })
@@ -48,6 +58,29 @@ export function CommandBuilder({ fragments, draft, onChange, onRun, busy }: Comm
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'Tab') {
+      // Tab 补全（M4）：作用于手写后缀 —— 唯一匹配直接补全（附空格）；
+      // 多候选补公共前缀；无候选吞掉默认行为。
+      const suffix = draft.suffix ?? '';
+      const { prefix, matches } = completeAtEnd({ input: suffix, candidates: completionCandidates });
+      event.preventDefault();
+      if (matches.length === 0) return;
+      if (matches.length === 1) {
+        const head = prefix.length === 0 ? suffix : suffix.slice(0, suffix.length - prefix.length);
+        onChange({ ...draft, suffix: head + matches[0] + ' ' });
+        return;
+      }
+      let common = matches[0];
+      for (const match of matches) {
+        while (!match.startsWith(common)) common = common.slice(0, -1);
+      }
+      if (common.length > prefix.length) {
+        const head = prefix.length === 0 ? suffix : suffix.slice(0, suffix.length - prefix.length);
+        onChange({ ...draft, suffix: head + common });
+      }
+      return;
+    }
+
     if (event.key !== 'Enter') return
     event.preventDefault()
     if (command.trim().length > 0) onRun(command)
