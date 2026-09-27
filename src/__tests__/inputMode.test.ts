@@ -1,6 +1,6 @@
 // fragments / completion 的 M4 扩展测试（拼接纯函数层 §2）
 //
-// ⚠️ 沿用 M2 的拼接不变式（M2-tasks-DONE §六）：
+// ⚠️ 沿用 M2 的拼接不变式（docs/milestones/M2-tasks.md §六）：
 //   「产物是合法命令，或某条已知合法命令的 token 前缀」—— 不断言首 token 必须是 git。
 // M4 新增：ch2/ch3 片段表、draftFromSkeleton（半拼骨架）。
 

@@ -506,7 +506,7 @@ describe('components —— CommandBuilder 拼接式输入', () => {
     //   所以「用 change 改成功」并不能证明玩家真能键盘输入。
     //   曾经的真实缺陷：拼接输入行被整体设为 readOnly，导致拼接只到 `-m` 为止后
     //   玩家**无法敲入提交信息**，1-1 直接卡死无法通关；而当时组件测试全绿。
-    //   该缺陷只在真实浏览器（真实键盘）暴露 —— 见 M2-tasks-DONE「实测环境事实」。
+    //   该缺陷只在真实浏览器（真实键盘）暴露 —— 见 docs/milestones/M2-tasks.md「实测环境事实」。
     //   故此处直接锁 `readOnly`/`disabled` 属性本身，补上 jsdom 抓不到的那一环。
     render(<BuilderHarness level={level} onRun={() => {}} />)
 

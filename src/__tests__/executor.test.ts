@@ -1,6 +1,6 @@
 // executor 集成测试（development-refinement.md §11.1：在测试用 LightningFS 内存实例上跑真实 gitApi）
 //
-// ⚠️ 后端注入（见 TODO/M1-preflight-DONE.md §3.2 与 `engine/fs.ts` 文件头）：
+// ⚠️ 后端注入（见 docs/milestones/M1-preflight.md §3.2 与 `engine/fs.ts` 文件头）：
 //   `MemoryBackend` 实现的是 LightningFS **内层** `DefaultBackend` 的 `db` 契约，
 //   不是顶层 `PromisifiedFS` 的 `backend`（那个要带 `mkdir`/`stat`/`readdir`）。
 //   因此统一走 `configureFs({ name, backend: new MemoryBackend() })` —— `fs.ts` 会把它

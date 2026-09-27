@@ -1,7 +1,7 @@
 // 进度 / 得分 / 成就（development-refinement.md §2 分层职责）。
 //
 // M1 只建立**内存态骨架**：不接持久化（persistence 排在 M5，
-// 见 TODO/M1-tasks-TODO.md「已确认的决策」第 3 条）。本文件不含任何 localStorage 代码。
+// 见 docs/milestones/M1-tasks.md「已确认的决策」第 3 条）。本文件不含任何 localStorage 代码。
 
 import { create } from 'zustand'
 

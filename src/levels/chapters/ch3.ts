@@ -23,9 +23,9 @@
  * - 命令集：branch / checkout / switch / merge / rebase（§8 与 GDD 一致）。
  * - 目标类型首次使用 M4 转正的 4 种：branch / headBranch / merged / logOrder。
  * - **3-6 的 OR 语义限制**：TargetCondition 为 AND 语义，无法表达「merge 或 rebase
- *   任一过关」（新增目标类型属范围外，见 M4-tasks-TODO §二）。本关按「merge 路径」
+ *   任一过关」（新增目标类型属范围外，见 docs/milestones/M4-tasks.md §二）。本关按「merge 路径」
  *   判定 —— 叙事明确说明：协作历史用 merge 保留完整脉络；rebase 适用场景（个人
- *   未推送分支）在笔记里展开。这是经用户确认的 M4 裁定（M4-tasks-TODO §〇.3 附注）。
+ *   未推送分支）在笔记里展开。这是经用户确认的 M4 裁定（docs/milestones/M4-tasks.md §〇.3 附注）。
  * - 3-5 的 rebase 引擎语义（M4 实测差异）：重放保留原提交 tree，故关卡数据保证
  *   feature 与 main 的改动**互不相交**（不同文件）—— 此场景下重放结果与真 git
  *   的三方合并一致（main 的 b.txt 等文件会经由重放链出现在 feature 视角之外，

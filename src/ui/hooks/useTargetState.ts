@@ -3,7 +3,7 @@
 // ⚠️ 本文件必须放在 `src/ui/hooks/`（而非组件目录内），原因有二：
 //   1. 组件测试会对 `GoalPanel` 做**模块 mock**，mock 路径必须与其它组件 import 的
 //      路径逐字符一致，集中在一处最不容易写歪；
-//   2. 检测属于「订阅 + 派生」，与 `useFileTree` / `useCommitHistory` 同类。
+//   2. 检测属于「订阅 + 派生」，与 `useFileTree` / `useCompletionCandidates` 同类。
 //
 // UI 层为纯展示：这里不碰 fs / gitApi，仓库读取与比对全部委托给
 // `game/validate/targetState`（纯函数层）。

@@ -5,7 +5,7 @@
 // 布局严格对齐 §9.1（M3 增补得分与 Hints，GitGraph/BranchPanel 仍待 M4）：
 //   ┌ 顶部栏：章节/关卡名 · 目标摘要 · 得分 · 星级 ────────────────────────┐
 //   ├ GoalPanel（目标与检测）      │ FileTree（工作区状态树）             │
-//   │ Terminal（命令输入 + 历史）  │ CommitPanel 提交图（GitGraph 属 M4） │
+//   │ Terminal（命令输入 + 历史）  │ GitGraph 提交图（M2 = CommitPanel）  │
 //   │ HintsPanel（M3 分步提示）    │                                      │
 //   └──────────────────────────────┴──────────────────────────────────────┘
 //

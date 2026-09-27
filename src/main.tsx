@@ -12,7 +12,7 @@
 // 初始化失败不阻断挂载 —— 把错误交给 App 显示，避免整页白屏（M1 验收项 5.2）。
 //
 // TODO(M5, §10)：boot 还应「加载持久化进度」并据此决定进入 intro 还是 menu；
-// 持久化排在 M5（见 TODO/M1-tasks-DONE.md「已确认的决策」第 3 条），
+// 持久化排在 M5（见 docs/milestones/M1-tasks.md「已确认的决策」第 3 条），
 // 届时在下方 reset 之后接入 `src/persistence/progress.ts`。
 
 // ⚠️ 必须在**任何 engine/git 代码之前**执行：为浏览器补上 Node 的 `Buffer` 全局。

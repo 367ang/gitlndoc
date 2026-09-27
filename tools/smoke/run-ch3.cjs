@@ -6,7 +6,7 @@
  *       merge ff（3-3）、**冲突消解全链路（3-4）**、rebase + logOrder（3-5）、
  *       merge collaborative（3-6）、GitGraph/BranchPanel 渲染、汇总 14/14。
  */
-const H = require('./scratch-smoke-helpers.cjs');
+const H = require('./cdp-client.cjs');
 
 (async () => {
   await H.connect();

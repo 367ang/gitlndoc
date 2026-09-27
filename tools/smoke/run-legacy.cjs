@@ -6,7 +6,7 @@
  * 流程：不种任何进度（验证未通关时 ch2/ch3 锁定）→ 通关 1-1~1-3 →
  *       1-4 第一环 → 新建文件制造第二环改动 → 归档 → 过关。
  */
-const H = require('./scratch-smoke-helpers.cjs');
+const H = require('./cdp-client.cjs');
 
 (async () => {
   await H.connect();

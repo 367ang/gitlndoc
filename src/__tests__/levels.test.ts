@@ -19,9 +19,9 @@
 //   不含 `@types/node`，故 `node:fs` / `__dirname` 会直接报 TS2307 / TS2304。
 //   而 `vite/client`（经 `src/vite-env.d.ts` 引入）已为 `?raw` 提供类型声明，
 //   测试与构建走的也是同一套解析 —— 比在测试里另开一条 Node 读取通道更贴合项目约定。
-import gitBasicsRaw from '../../notes/git-basics.md?raw'
-import gitBasicOperationsRaw from '../../notes/git-basic-operations.md?raw'
-import gitBranchesRaw from '../../notes/git-branches.md?raw'
+import gitBasicsRaw from '../../docs/notes/git-basics.md?raw'
+import gitBasicOperationsRaw from '../../docs/notes/git-basic-operations.md?raw'
+import gitBranchesRaw from '../../docs/notes/git-branches.md?raw'
 import { describe, expect, it } from 'vitest'
 import {
   CHAPTERS,
@@ -112,7 +112,7 @@ function readNote(noteSlug: string): string {
   const content = NOTES[noteSlug]
   if (content === undefined) {
     throw new Error(
-      `笔记 notes/${noteSlug}.md 未登记在 NOTES 中；新增笔记时请在本文件顶部补一行 ?raw 导入。`,
+      `笔记 docs/notes/${noteSlug}.md 未登记在 NOTES 中；新增笔记时请在本文件顶部补一行 ?raw 导入。`,
     )
   }
   return content
@@ -494,7 +494,7 @@ describe('关卡数据 —— relatedKnowledge 反查笔记', () => {
         for (const [heading] of matched) {
           expect(
             headings.has(heading),
-            `${id} 映射到标题 "${heading}"，但 notes/${note}.md 中没有逐字匹配的小节。` +
+            `${id} 映射到标题 "${heading}"，但 docs/notes/${note}.md 中没有逐字匹配的小节。` +
               `笔记现有小节：${[...headings].join(' / ')}`,
           ).toBe(true)
         }
@@ -883,7 +883,7 @@ describe('关卡数据 —— 第二、三章 relatedKnowledge 反查', () => {
         const matched = heading === undefined ? [] : [[heading, slug]]
         expect(matched.length, `${id} 的 slug 未登记`).toBeGreaterThan(0)
         for (const [heading] of matched) {
-          expect(headings.has(heading), `${id} → "${heading}" 不在 notes/${note}.md 中`).toBe(true)
+          expect(headings.has(heading), `${id} → "${heading}" 不在 docs/notes/${note}.md 中`).toBe(true)
         }
       }
     }

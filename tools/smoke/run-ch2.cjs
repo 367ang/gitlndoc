@@ -6,7 +6,7 @@
  * 覆盖：章节解锁、probeBonus 场景（2-1 status 探查）、文件编辑器（2-2/2-4）、
  *       rm 真删（2-4）、.gitignore 生效（2-4 收尾 workdirClean）。
  */
-const H = require('./scratch-smoke-helpers.cjs');
+const H = require('./cdp-client.cjs');
 
 (async () => {
   await H.connect();

@@ -182,7 +182,7 @@ function validateHints(hints: unknown, collector: ErrorCollector): void {
  * 以及语义等价的 `template: 'blank' | 'emptyRepo'`。
  *
  * ⚠️ `tags` / `remotes` / `template: 'cloneSource'` 会在
- * `sandbox.reset()` 处 **fail-fast 报错**（刻意不伪造，见 M1-tasks-DONE「实测环境事实」）。
+ * `sandbox.reset()` 处 **fail-fast 报错**（刻意不伪造，见 docs/milestones/M1-tasks.md「实测环境事实」）。
  * 若把关卡写坏了要等到玩家进关才炸，体验很差 —— 故这里在校验期就拦下，
  * 并给出与 sandbox 同一口径的说明。
  *

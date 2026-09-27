@@ -1,6 +1,6 @@
 # 《Git 时间旅行者》开发细化工程文档
 
-> 配套文档：`game-design.md`（游戏设计）、`other/frontend-changes.md`（笔记知识点映射）
+> 配套文档：`game-design.md`（游戏设计）、`docs/notes-change-log.md`（笔记知识点映射）
 > 本文档将游戏设计转化为可执行的工程实现规范：架构、模块、数据、组件、状态、构建与任务拆解。
 > 核心原则：**奖励理解、惩罚试错** —— 工程上以「真实 Git 执行 + 目标状态校验」为核心，
 > 让玩家通过思考而非盲目敲命令来获得评分。
@@ -123,6 +123,54 @@ src/
     ├── executor.test.ts
     └── components.test.tsx
 ```
+
+### 3.1 与实际的差异（截至 M4）
+
+上方代码块是**设计基线**（成文于任何 `src/` 代码存在之前），**刻意保持原样**，以免丢失「原本规划」的信息。实现过程中的实际落点如下，差异逐条记录，并标注归属里程碑。
+
+**目录落点差异**（`§3 规划` → `实际`）：
+
+| §3 规划 | 实际 | 说明 / 归属 |
+| --- | --- | --- |
+| `ui/components/branchPanel/` | `ui/components/gitGraph/BranchPanel.tsx` | 分支面板与提交图同属右上列，合并进 `gitGraph/`（M4 落地） |
+| `ui/components/scoring/` | `ui/components/level/LevelComplete.tsx` | 结算界面属关卡流程的一环，并入 `level/`（M3 落地） |
+| `ui/components/hints/` | `ui/components/level/HintsPanel.tsx` | 同上，提示面板并入 `level/`（M3 落地） |
+| `ui/components/achievements/` | 未建；成就在 `game/scoring/achievements.ts` | 当前无独立成就 UI，仅有判定逻辑（M3 落地，UI 待需要时再拆） |
+| `ui/components/intro/` | 未建 | 开场叙事暂由 `app/ViewPlaceholder.tsx` 承担；正式实现待后续里程碑 |
+| `ui/components/common/` | 未建 | 通用件尚未抽象 —— 尚无重复到值得抽出的程度（不提前抽象） |
+| `ui/hooks/` 的 `useGitGraph` | `ui/hooks/useTargetState.ts`、`useCompletionCandidates.ts` | 实际 hook 集合与规划不同名；`useFileTree` 落在 `ui/components/fileTree/useFileTree.ts` 而非 `ui/hooks/`（见下条） |
+| `persistence/progress.ts`、`persistence/snapshot.ts` | **不存在** | 进度持久化目前直接由 `store/progressStore.ts` 承担；快照持久化定于 **M5** 建立 |
+| `game/validate/stepHints.ts` | `game/validate/stepHints.ts` + `stillMissingHint.ts` | 追加了「还差什么」的引导语模块（M2/M3） |
+
+**§3 未列、但实际存在**（规划时的合理遗漏，非缺陷）：
+
+- `game/graph/gitGraph.ts` —— 提交图 DAG 泳道计算（M4；§9.1 GitGraph 的配套纯函数层）。
+- `game/editor.ts` —— 文件编辑器逻辑（M4 新增文件编辑）。
+- `game/progression.ts` —— 关卡推进/解锁规则。
+- `game/command/fragments.ts`、`completion.ts` —— 拼接式输入片段与 Tab 补全（M4）。
+- `app/startLevel.ts`、`app/ViewPlaceholder.tsx`、`app/App.module.css`。
+- `ui/components/level/LevelScreen.module.css`、`HintsPanel.module.css`、`LevelComplete.module.css` 等各组件配套样式。
+- `ui/hooks/` 下实际仅有 `useTargetState.ts` 与 `useCompletionCandidates.ts`。
+- `__tests__/` 实际有 **7** 个测试文件（§3 只列了 4 个）：另有 `targetState.test.ts`(32)、`levels.test.ts`(56)、`inputMode.test.ts`(12)，及 `setup.ts`（`fake-indexeddb/auto` 必须保留，缘由见 `docs/milestones/M1-tasks.md`）。
+
+**章节命名双轨（文档 vs 代码，⚠️ 待统一）**
+
+GDD `game-design.md` §4 的章名与代码 `src/levels/chapters/index.ts` 的 `ChapterMeta.title` **不一致**。实测对照：
+
+| 章 | GDD（`game-design.md` §4） | 代码（`ChapterMeta.title`） | 一致？ |
+| --- | --- | --- | --- |
+| 第一章 | 创世纪元 | 创世纪元 | ✅ |
+| 第二章 | 日常秩序 | 日常秩序 | ✅ |
+| 第三章 | 平行宇宙 | 平行宇宙 | ✅ |
+| 第四章 | 星际连接 | 遥远回响 | ❌ |
+| 第五章 | 时空回溯 | 时间倒流 | ❌ |
+| 第六章 | 历史锚点 | 永恒印记 | ❌ |
+| 终章 | 大统一 | 时间线终点 | ❌ |
+
+- **成因**：GDD 是叙事基线的唯一事实来源，成文在前；代码侧章名是 M2 阶段自行拟定的。
+- **待统一**：建议**以 GDD 为准**，在 M5/M6 实现四至六章与综合终章时一并修改 `ChapterMeta.title`。
+- **本次不修改的理由**：改代码 title 会影响 UI 显示与可能的测试断言，改 GDD 则等于放弃叙事基线 —— 两者都超出「目录整理」的范围，故**仅记录、不修改**。
+- **现状影响**：ch4~ch6 与 F 当前 `playable: false`（尚未实现），玩家尚看不到这些名称，因此该不一致暂无用户可见影响。
 
 ---
 

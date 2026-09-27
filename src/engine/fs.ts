@@ -5,7 +5,7 @@
  *   - `/repo`        玩家操作的主仓库
  *   - `/remote.git`  「远程宇宙」的裸仓库（第四章远程关卡使用）
  *
- * ⚠️ 后端注入是这块的关键（见 TODO/M1-preflight-DONE.md §3.2）：
+ * ⚠️ 后端注入是这块的关键（见 docs/milestones/M1-preflight.md §3.2）：
  * LightningFS 默认的存储是 `IdbBackend`，依赖浏览器的 `indexedDB`，
  * **在纯 Node / jsdom 环境会抛 `ReferenceError: indexedDB is not defined`** —— 这是预期行为。
  * 因此这里把存储做成可注入项：浏览器走默认 IdbBackend，测试注入 `MemoryBackend`，

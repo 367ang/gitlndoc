@@ -1,9 +1,23 @@
 # M2 任务清单（关卡框架 + 第一章可玩）—— ✅ 已完成
 
-> 本文档记录 M2 的执行结果、验收证据与实测环境事实。原 `M2-tasks-TODO.md` 的任务清单保留在下方（已勾选）。
+> 本文档记录 M2 的执行结果、验收证据与实测环境事实。原 `M2-tasks-TODO.md`（即本文件，后按命名约定去掉状态后缀）的任务清单保留在下方（已勾选）。
 >
 > **M2 目标（§13 原文）**：`levels/schema.ts` + 第一章 4 关、Terminal/FileTree/GoalPanel、目标检测。
 > **M2 产出（验收标准）**：第一章可玩（菜单式）。 → **已达成**
+
+**本文档结构**
+
+- [〇、验收结论（Lead 独立复跑）](#〇验收结论lead-独立复跑)
+- [一、交付内容](#一交付内容)
+- [二、验收标准的逐条核对（§13 M2）](#二验收标准的逐条核对§13-m2)
+- [三、执行中发现并修掉的真实缺陷（共 9 个）](#三执行中发现并修掉的真实缺陷共-9-个)
+- [四、实测环境事实（M3+ 务必以此为准）](#四实测环境事实m3-务必以此为准)
+- [五、已知问题与遗留（不阻塞 M2 验收）](#五已知问题与遗留不阻塞-m2-验收)
+- [六、测试策略的落实（§11）](#六测试策略的落实§11)
+- [七、§5.5 真实浏览器冒烟实测记录（Lead 独立执行）](#七§55-真实浏览器冒烟实测记录lead-独立执行)
+- [八、原任务清单（执行记录）](#八原任务清单执行记录)
+- [九、下一步（M3 建议）](#九下一步m3-建议)
+- [参考索引](#参考索引)
 
 ---
 
@@ -162,13 +176,13 @@ fireEvent.change(input, { target: { value: 'x' } })
 测试中若需读仓库内文本文件（如反查笔记小节），**不能用 `node:fs` / `__dirname`**（报 TS2307 / TS2304）。
 **对策**：用 Vite 的 `?raw` 导入（`vite/client` 已提供类型）：
 ```ts
-import gitBasicsRaw from '../../notes/git-basics.md?raw'
+import gitBasicsRaw from '../../docs/notes/git-basics.md?raw'
 ```
 已验证**笔记正文不会进入生产 bundle**（构建产物中 grep 不到）。路径仅测试侧解析。
 
 ### 4. `relatedKnowledge` 的 slug 有两套无法统一机械推导的规则
 
-`notes/git-basics.md` 的标题转 slug 时：
+`docs/notes/git-basics.md` 的标题转 slug 时：
 - `### 本地仓库 (Local Repository)` → 取**英文括注** → `local-repository`
 - `## 对象模型` → 取**意译 slug** → `object-model`
 
@@ -345,7 +359,7 @@ import gitBasicsRaw from '../../notes/git-basics.md?raw'
 | 内容 | 位置 |
 |---|---|
 | 仓库约定与当前状态 | `AGENTS.md` |
-| M1 实测环境事实 | `TODO/M1-tasks-DONE.md` 末尾 |
+| M1 实测环境事实 | `docs/milestones/M1-tasks.md` 末尾 |
 | 第一章关卡列表与输入方式 | `game-design.md` 第 77–80 行、§3.2 |
 | 关卡定义 / 初始化 / 达标条件 | `development-refinement.md` §4.1、§4.2、§4.3 |
 | 目录结构 | §3 |
@@ -354,4 +368,4 @@ import gitBasicsRaw from '../../notes/git-basics.md?raw'
 | 关卡主界面布局 | §9.1 |
 | 测试策略 | §11 |
 | 里程碑 M2 定义 | §13 |
-| 第一章知识依据 | `notes/git-basics.md` |
+| 第一章知识依据 | `docs/notes/git-basics.md` |

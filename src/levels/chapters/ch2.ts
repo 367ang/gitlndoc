@@ -24,7 +24,7 @@
  *
  * ─── relatedKnowledge 映射约定（沿用 ch1.ts 的两套规则）────────────────────
  *
- * GDD「关联」列与 `notes/git-basic-operations.md` 的实际小节并非逐字对应，
+ * GDD「关联」列与 `docs/notes/git-basic-operations.md` 的实际小节并非逐字对应，
  * 由 Lead 核定映射（levels.test.ts 的 SLUG_BY_HEADING 反查小节标题）：
  *
  * | 关卡 | GDD 关联           | 笔记实际小节    | id                                        |

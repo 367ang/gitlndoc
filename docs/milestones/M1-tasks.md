@@ -9,7 +9,7 @@
 
 ## 阶段 0：前置条件 —— ✅ 已全部完成
 
-详见 `TODO/M1-preflight-DONE.md`。摘要：
+详见 `docs/milestones/M1-preflight.md`。摘要：
 
 - [x] **0.1 PATH 问题**：`node` / `pnpm` / `gh` 都在 Homebrew 路径下，沙箱 shell 的 PATH 不含该目录。**每个新会话第一条 Node 命令前先执行**：
   ```bash
@@ -172,7 +172,7 @@ M1 验收要求"能 init/add/commit 并可视化"，因此需要一个最小可�
 
 ---
 
-## ⚠️ 实测环境事实（订正 `M1-preflight-DONE.md` §3 的两条结论）
+## ⚠️ 实测环境事实（订正 `docs/milestones/M1-preflight.md` §3 的两条结论）
 
 以下均经**运行时对照实验**得出（非文档转述）。两条与原结论**相反**，M2+ 务必以此为准。
 
@@ -228,7 +228,7 @@ this._mutex = navigator.locks ? new Mutex2(name) : new Mutex(lockDbName, lockSto
 
 ### 4. `LightningFS.promises.writeFile` **不自动创建父目录**
 
-实测写 `/repo/b/c.txt` 且 `/repo/b` 不存在时抛 `ENOENT`。`sandbox.ts` 已加 `ensureParentDirs()` 逐级补齐 —— 否则 `LevelInit.files` 里的嵌套路径（如 `notes/intro.md`）会直接失败。**M2 关卡数据会大量用到，务必知悉。**
+实测写 `/repo/b/c.txt` 且 `/repo/b` 不存在时抛 `ENOENT`。`sandbox.ts` 已加 `ensureParentDirs()` 逐级补齐 —— 否则 `LevelInit.files` 里的嵌套路径（如沙箱仓库内的 `notes/intro.md`）会直接失败。**M2 关卡数据会大量用到，务必知悉。**
 
 ### 5. 其他
 

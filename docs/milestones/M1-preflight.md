@@ -68,7 +68,7 @@ pnpm 12 默认阻止依赖的 postinstall，首次安装报 `ERR_PNPM_IGNORED_BU
 | 3 | 命令解析归属 | **M1**（`game/command/` 的 `tokenize` / `grammar` / `executor`，不用临时直通方案） |
 | 4 | persistence | **M5 落地**，M1 不实现 |
 
-详细展开见 `TODO/M1-tasks-TODO.md` 的「已确认的决策」章节。
+详细展开见 `docs/milestones/M1-tasks.md` 的「已确认的决策」章节。
 
 ---
 
@@ -173,7 +173,7 @@ const fs = new LightningFS('test', { db: new MemoryBackend() });
 
 | 内容 | 位置 |
 |---|---|
-| M1 任务清单（分阶段） | `TODO/M1-tasks-TODO.md` |
+| M1 任务清单（分阶段） | `docs/milestones/M1-tasks.md` |
 | 仓库约定与当前状态 | `AGENTS.md` |
 | 技术选型 / 架构 / 目录结构 | `development-refinement.md` §1、§2、§3 |
 | 视图状态机 | §5 |
