@@ -24,6 +24,7 @@ import { GitCommandError, GitUnsupportedError, runGit, type GitResult } from './
 import { clearSandboxRoot, ensureSandboxRoot, fsp, REPO_DIR } from './fs';
 import * as gitApi from './gitApi';
 import { DEFAULT_BRANCH } from './gitApi';
+import { clearReflog } from './reflog';
 
 /** M1 已落地的 `LevelInit` 字段——只有这两个，其余字段见 `unsupportedInitError()` */
 export type SupportedInitField = 'files' | 'commits';
@@ -147,11 +148,17 @@ export async function reset(init: LevelInit = {}): Promise<GitResult<SandboxStat
     // 2) 重建 /repo 与 /remote.git 两级目录
     await ensureSandboxRoot();
 
-    // 3) 初始化主仓库：/repo，默认分支 main
+    // ⚠️ 3) 清空 reflog（M5a）：每关都是全新的时间线，上一关的 ref 移动历史
+    // 指向的提交在本关已不存在 —— 留着会让 `git reflog` 输出「能恢复到不存在提交」
+    // 的假象（§14 禁止伪造）。且日志按仓库目录为键，不清会跨关串味（实测缺陷：
+    // 3-2 切到 feature 后 3-3 的 `main` 解析受影响）。
+    clearReflog({ dir: REPO_DIR });
+
+    // 4) 初始化主仓库：/repo，默认分支 main
     const inited = await gitApi.init({ dir: REPO_DIR });
     if (!inited.ok) throw inited.error;
 
-    // 4) 写预置文件（首次写入；仅入工作区，不入任何提交 —— 入库走 InitCommit.files）
+    // 5) 写预置文件（首次写入；仅入工作区，不入任何提交 —— 入库走 InitCommit.files）
     const filepaths = await writeFiles(init.files ?? {});
 
     // 5) 建预置提交：逐条（切分支 →）add + commit，产出真实对象库。
@@ -215,7 +222,12 @@ export async function reset(init: LevelInit = {}): Promise<GitResult<SandboxStat
       if (!mainCheck.ok) throw mainCheck.error;
     }
 
-    // 6) 汇总状态：提交列表 + 工作区是否干净
+    // 8) 预置「工作区被搞乱」的状态（M5a 的 `dirty`，服务第五章的撤销剧本）。
+    //    ⚠️ 必须在**所有预置提交与检出游标归位之后**执行：提交会写文件、checkout 会
+    //    重建工作区，任何一步在其后都会把玩家要面对的「错误状态」覆盖掉。
+    await applyDirty(init.dirty ?? {});
+
+    // 9) 汇总状态：提交列表 + 工作区是否干净
     const logged = await gitApi.log({ dir: REPO_DIR });
     if (!logged.ok) throw logged.error;
 
@@ -232,6 +244,36 @@ export async function reset(init: LevelInit = {}): Promise<GitResult<SandboxStat
       clean: staged.length === 0 && unstaged.length === 0 && untracked.length === 0,
     };
   });
+}
+
+/**
+ * 应用 `LevelInit.dirty` —— 把工作区改成「被搞乱」的状态（M5a）。
+ *
+ * 语义（与 `files` 的关键差别在于**执行时机**，见 `reset()` 的步骤 8）：
+ *   - 字符串值 → 覆盖工作区内容。对已追踪文件即「有未暂存改动」；
+ *   - `null`   → 从工作区删除（模拟误删；索引与 HEAD 仍保留，故 `git restore` 能找回）。
+ *
+ * ⚠️ 删除走 `fsp.unlink` 而非 `git rm`：`git rm` 会**同时**把删除记进索引，
+ *    那样目标文件会直接变成「已暂存的删除」，玩家就不需要「恢复」了 ——
+ *    与关卡要考的动作正好相反（M5a 实测确认了这一点）。
+ *
+ * 路径不存在时（`dirty` 写错文件名）按 ENOENT 向上抛 —— 关卡数据错误应当当场暴露，
+ * 而不是留下一个「看起来正常但没有错误状态」的仓库。
+ */
+async function applyDirty(dirty: Record<string, string | null>): Promise<void> {
+  for (const [path, content] of Object.entries(dirty)) {
+    const relative = normalizeRepoPath(path);
+    const absolute = `${REPO_DIR}/${relative}`;
+
+    if (content === null) {
+      await fsp.unlink(absolute);
+      continue;
+    }
+
+    // 覆盖已存在文件时父目录必然存在；新建路径时补齐（与 writeFiles 同款防御）
+    await ensureParentDirs(absolute);
+    await fsp.writeFile(absolute, content);
+  }
 }
 
 /**

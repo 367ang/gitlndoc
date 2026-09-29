@@ -5,15 +5,16 @@
  * 不含任何判定/计分逻辑（那些在 `game/validate/` 与 M3 的 `game/scoring/`）。
  * UI 只经此处取关卡，不直接 import 具体章节文件 —— 这样新增章节时 UI 无需改动。
  *
- * ⚠️ 当前注册了 ch1~ch3（M4）。ch4~ch6 与综合挑战 F 属 M5/M6（§13），
- * 尚未落地时**不注册**，`getChapterLevels('ch4')` 会如实返回空数组 ——
- * 不伪造占位关卡（§14）。
+ * ⚠️ 当前注册了 ch1~ch3（M4）与 **ch5（M5a）**。ch4 与 ch6、综合挑战 F 尚未落地，
+ * **不注册**，`getChapterLevels('ch4')` 会如实返回空数组 —— 不伪造占位关卡（§14）。
+ * （ch4 远程属 M5b，ch6 标签属 M6。）
  */
 
 import type { ChapterId, Level } from '../../game/types';
 import { CHAPTER_1_LEVELS } from './ch1';
 import { CHAPTER_2_LEVELS } from './ch2';
 import { CHAPTER_3_LEVELS } from './ch3';
+import { CHAPTER_5_LEVELS } from './ch5';
 
 /** 章节元信息，供菜单/章节页渲染（§9.1） */
 export interface ChapterMeta {
@@ -27,7 +28,16 @@ export interface ChapterMeta {
   playable: boolean;
 }
 
-/** 全部章节元信息，按主线顺序排列 */
+/**
+ * 全部章节元信息，按主线顺序排列。
+ *
+ * ⚠️ **章名以 GDD 为准**（M5a 统一）：`game-design.md` §4 的章名是叙事基线，
+ * 而代码侧的章名曾是 M2 阶段自行拟定的，两套长期不一致（详见
+ * `development-refinement.md` §3「章节命名双轨」表）。M5a 起四处已对齐：
+ *   第四章 遥远回响 → **星际连接**、第五章 时间倒流 → **时空回溯**、
+ *   第六章 永恒印记 → **历史锚点**、终章 时间线终点 → **大统一**。
+ * 改动章名会影响 UI 显示与测试断言，故此后新增章节时应直接照抄 GDD §4。
+ */
 export const CHAPTERS: readonly ChapterMeta[] = [
   {
     id: 'ch1',
@@ -53,28 +63,28 @@ export const CHAPTERS: readonly ChapterMeta[] = [
   {
     id: 'ch4',
     order: 4,
-    title: '遥远回响',
+    title: '星际连接',
     subtitle: 'Git 远程操作 —— remote / push / fetch / pull',
     playable: false,
   },
   {
     id: 'ch5',
     order: 5,
-    title: '时间倒流',
+    title: '时空回溯',
     subtitle: 'Git 撤销操作 —— reset / revert / restore',
-    playable: false,
+    playable: true,
   },
   {
     id: 'ch6',
     order: 6,
-    title: '永恒印记',
+    title: '历史锚点',
     subtitle: 'Git 标签管理 —— tag / show / describe',
     playable: false,
   },
   {
     id: 'F',
     order: null,
-    title: '时间线终点',
+    title: '大统一',
     subtitle: '综合挑战 —— 全部知识的汇聚',
     playable: false,
   },
@@ -86,7 +96,7 @@ const LEVELS_BY_CHAPTER: Record<ChapterId, readonly Level[]> = {
   ch2: CHAPTER_2_LEVELS,
   ch3: CHAPTER_3_LEVELS,
   ch4: [],
-  ch5: [],
+  ch5: CHAPTER_5_LEVELS,
   ch6: [],
   F: [],
 };

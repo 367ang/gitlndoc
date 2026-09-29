@@ -23,6 +23,7 @@ import {
   add as gitAdd,
   branch as gitBranch,
   checkout as gitCheckout,
+  checkoutPaths as gitCheckoutPaths,
   commit as gitCommit,
   diff as gitDiff,
   init as gitInit,
@@ -31,8 +32,12 @@ import {
   logAll as gitLogAll,
   merge as gitMerge,
   rebase as gitRebase,
+  reflog as gitReflog,
   remove as gitRemove,
   removePaths as gitRemovePaths,
+  reset as gitReset,
+  restore as gitRestore,
+  revert as gitRevert,
   status as gitStatus,
   unsupported,
   type CommitEntry,
@@ -69,8 +74,8 @@ export interface ExecuteOptions extends RepoOptions {
 }
 
 /** 组装成功结果 */
-function succeed(tokens: string[], output: string[]): ExecuteResult {
-  return { ok: true, tokens, output, undoable: false };
+function succeed(tokens: string[], output: string[], undoable = false): ExecuteResult {
+  return { ok: true, tokens, output, undoable };
 }
 
 /** 组装失败结果 */
@@ -86,6 +91,18 @@ function renderError(error: GitCommandError): string {
     return error.message;
   }
 }
+
+/**
+ * §6.2 规定的**撤销类命令**的用户可见口径，供本文件各 case 判断 `undoable`：
+ *   - `reset`（三模式都属回退；`--hard` 的破坏性由关卡叙事承担，此处不额外区分）；
+ *   - `revert`（生成反向提交，属「撤销已归档的改动」）；
+ *   - `restore` / `checkout -- <path>`（丢弃工作区改动、撤销暂存）。
+ *
+ * ⚠️ **`git reflog` 不算撤销**：它是只读命令，属 §7.3 的「探查奖励」——
+ * 5-6 的教学剧本里玩家要先 `reflog` 查看再恢复，把查看也算撤销会平白扣分。
+ * 因此下面各 case 直接传 `true`，而不是按 verb 查表统一判定（`checkout`
+ * 的撤销性取决于是否有路径参数，无法只按 verb 决定）。
+ */
 
 /**
  * 解包 `GitResult<T>`：成功取值，失败转成 `ExecuteResult`。
@@ -299,12 +316,6 @@ export async function execute(input: string, options: ExecuteOptions = {}): Prom
     }
 
     case 'commit': {
-      if (command.amend) {
-        // `--amend` 属 M5 范围，明确回「不支持」而非静默忽略
-        const result = unsupported('commit --amend');
-        return failWith(tokens, result.ok ? 'git commit --amend 在当前版本中尚不支持。' : renderError(result.error));
-      }
-
       // `-a`：提交前自动暂存已跟踪文件的改动（含工作区删除）
       if (command.all) {
         const statusResult = await gitStatus(repoOptions);
@@ -320,11 +331,26 @@ export async function execute(input: string, options: ExecuteOptions = {}): Prom
         }
       }
 
-      const message = command.message ?? '';
-      return unwrap(await gitCommit(message, repoOptions), tokens, (result) => {
+      // `--amend --no-edit`（M5a）：沿用原提交信息。
+      // 原信息从 HEAD 提交读出；无 HEAD 时真 git 会报「You have nothing to amend」。
+      let message = command.message ?? '';
+      if (command.amend && command.noEdit === true) {
+        const headMessage = await headCommitMessageOf(repoOptions);
+        if (headMessage === null) {
+          return failWith(
+            tokens,
+            '还没有任何提交可供修补 —— --amend 只能用于修正最近一次快照。',
+          );
+        }
+        message = headMessage;
+      }
+
+      return unwrap(await gitCommit(message, { ...repoOptions, amend: command.amend }), tokens, (result) => {
         const shortHash = result.hash.slice(0, 7);
         // 对齐真 git 的 commit 回显格式；分支名 M4 起真实读取（M1 曾硬编码 main，
         // 分支关卡里会显示错误分支 —— M4 的 GitGraph/BranchPanel 都依赖真实分支语义）
+        // ⚠️ amend 的真 git 输出同样是 `[main abc1234] <信息>`，不做特殊标记，
+        // 以保持「玩家看到的与真 git 一致」；教学上的差异由关卡叙事说明。
         return succeed(tokens, [
           `[${result.branch} ${shortHash}] ${message.split('\n')[0]}`,
         ]);
@@ -359,6 +385,17 @@ export async function execute(input: string, options: ExecuteOptions = {}): Prom
     }
 
     case 'checkout': {
+      // `git checkout -- <pathspec>`（M5a）：丢弃工作区改动，与 `git restore` 同语义。
+      // 记 undoable（§6.2 字面清单里的「checkout --」即此）。
+      if (command.paths !== undefined && command.paths.length > 0) {
+        return unwrap(await gitCheckoutPaths(command.paths, repoOptions), tokens, (result) =>
+          succeed(
+            tokens,
+            result.paths.map((path) => `已把 ${path} 恢复到暂存区的版本（工作区改动已丢弃）`),
+            true,
+          ),
+        );
+      }
       if (command.create) {
         // `checkout -b <name>` = 创建并切换；复用 branch + checkout 组合
         const created = await gitBranch(command.branch, repoOptions);
@@ -445,10 +482,80 @@ export async function execute(input: string, options: ExecuteOptions = {}): Prom
         return succeed(tokens, lines);
       });
 
+    // ── M5a：第五章「时空回溯」───────────────────────────────────────────
+    case 'reset': {
+      // 三模式的回显对齐真 git：`HEAD is now at <短hash> <信息>`（--hard）
+      // 与 `Unstaged changes after reset:`（--mixed）等文案差异在此简化为一句话，
+      // 但**保留目标短 hash 与模式**，让玩家能核对「退到哪了、动没动工作区」。
+      return unwrap(
+        await gitReset(command.target, { ...repoOptions, mode: command.mode }),
+        tokens,
+        (result) => {
+          const modeText =
+            result.mode === 'soft'
+              ? '提交已撤销，改动仍留在暂存区'
+              : result.mode === 'mixed'
+                ? '提交已撤销，改动退回工作区（暂存区已清空）'
+                : '提交与工作区改动都已丢弃';
+          const lines = [`HEAD 现在指向 ${result.target}（${result.targetLabel}）：${modeText}`];
+          if (result.mode === 'hard') lines.push('⚠️ 这次回退丢弃了工作区的改动 —— 如需找回，可用 git reflog 查看历史位置。');
+          return succeed(tokens, lines, true);
+        },
+      );
+    }
+
+    case 'restore': {
+      return unwrap(
+        await gitRestore(command.paths, { ...repoOptions, staged: command.staged }),
+        tokens,
+        (result) =>
+          succeed(
+            tokens,
+            result.paths.map((path) =>
+              command.staged
+                ? `已把 ${path} 移出暂存区（工作区内容保留）`
+                : `已把 ${path} 恢复到暂存区的版本（工作区改动已丢弃）`,
+            ),
+            true,
+          ),
+      );
+    }
+
+    case 'revert': {
+      return unwrap(await gitRevert(command.target, repoOptions), tokens, (result) =>
+        succeed(
+          tokens,
+          [
+            `[${result.hash.slice(0, 7)}] ${result.message}`,
+            `已生成一条反向提交，抵消 ${result.reverted.slice(0, 7)} 的改动 —— 历史向前延伸，而不是被改写。`,
+          ],
+          true,
+        ),
+      );
+    }
+
+    case 'reflog':
+      return unwrap(await gitReflog(repoOptions), tokens, (lines) => {
+        if (lines.length === 0) return succeed(tokens, ['（还没有任何 HEAD 移动记录）']);
+        return succeed(tokens, lines);
+      });
+
     default:
       // SUPPORTED_VERBS 已由 grammar 收敛，此处不可达
       return failWith(tokens, '该命令在当前版本中尚不支持。');
   }
+}
+
+/**
+ * 读 HEAD 提交的完整信息（trim 后）；无提交或读取失败返回 null。
+ *
+ * 供 `git commit --amend --no-edit` 沿用原提交信息使用 —— executor 层不直接调
+ * isomorphic-git，故经 `gitApi.log()` 取（它已把首条提交的 message 归一为 trim 后文本）。
+ */
+async function headCommitMessageOf(options: RepoOptions): Promise<string | null> {
+  const logged = await gitLog({ ...options, depth: 1 });
+  if (!logged.ok) return null;
+  return logged.value[0]?.message ?? null;
 }
 
 /**

@@ -22,6 +22,7 @@
 import gitBasicsRaw from '../../docs/notes/git-basics.md?raw'
 import gitBasicOperationsRaw from '../../docs/notes/git-basic-operations.md?raw'
 import gitBranchesRaw from '../../docs/notes/git-branches.md?raw'
+import gitUndoRaw from '../../docs/notes/git-undo.md?raw'
 import { describe, expect, it } from 'vitest'
 import {
   CHAPTERS,
@@ -34,6 +35,7 @@ import {
 import { CHAPTER_1_LEVELS } from '../levels/chapters/ch1'
 import { CHAPTER_2_LEVELS } from '../levels/chapters/ch2'
 import { CHAPTER_3_LEVELS } from '../levels/chapters/ch3'
+import { CHAPTER_5_LEVELS } from '../levels/chapters/ch5'
 import {
   IMPLEMENTED_TARGET_TYPES,
   UNIMPLEMENTED_TARGET_TYPES,
@@ -45,7 +47,7 @@ import { reset } from '../engine/sandbox'
 import { configureFs, type FsIdb } from '../engine/fs'
 import { evaluateTargets } from '../game/validate/targetState'
 import { execute } from '../game/command/executor'
-import { LOG_PAGE_THIRD, UNIVERSE_BASE } from '../levels/presets'
+import { LOG_PAGE_THIRD, STAGING_DRAFT_FINAL, UNIVERSE_BASE } from '../levels/presets'
 import * as LightningFsNS from '@isomorphic-git/lightning-fs'
 import type { ChapterId, Level } from '../game/types'
 
@@ -56,6 +58,7 @@ const NOTES: Record<string, string> = {
   'git-basics': gitBasicsRaw,
   'git-basic-operations': gitBasicOperationsRaw,
   'git-branches': gitBranchesRaw,
+  'git-undo': gitUndoRaw,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -105,6 +108,14 @@ const SLUG_BY_HEADING: Record<string, string> = {
   'merge-conflict': '### 合并冲突处理',
   'rebase-vs-merge': '### Rebase vs Merge',
   'best-practices': '## 分支管理最佳实践',
+  // 规则 B（git-undo，M5a ch5）：标题即语义，slug 取英文关键词。
+  // ⚠️ 逐字标题必须与 docs/notes/git-undo.md 完全一致（含「三种模式」「命令」等中文字样）。
+  amend: '### 修改最后一次提交',
+  unstage: '### unstage 文件',
+  restore: '### restore 命令',
+  'reset-vs-revert': '### reset 三种模式',
+  revert: '### revert 命令',
+  reflog: '### 使用 reflog',
 }
 
 /** 读一篇笔记的正文；未登记时抛错（比静默返回空串更容易定位） */
@@ -180,9 +191,11 @@ describe('关卡数据 —— 第一章 id 与顺序', () => {
     expect(getLevel('随便')).toBeNull()
 
     expect(getFirstLevelOfChapter('ch1')?.id).toBe('ch1-1')
-    // 尚未落地的章节如实返回空数组 / null，不伪造占位关卡（§14）—— M4 起仅 ch4+ 为空
+    // 尚未落地的章节如实返回空数组 / null，不伪造占位关卡（§14）
+    // —— M5a 起 ch5 已注册，仅 ch4（远程，M5b）与 ch6（标签，M6）为空
     expect(getChapterLevels('ch4')).toEqual([])
     expect(getFirstLevelOfChapter('ch4')).toBeNull()
+    expect(getChapterLevels('ch6')).toEqual([])
 
     expect(getAllLevels().map((level) => level.id)).toEqual([
       'ch1-1',
@@ -199,19 +212,46 @@ describe('关卡数据 —— 第一章 id 与顺序', () => {
       'ch3-4',
       'ch3-5',
       'ch3-6',
+      'ch5-1',
+      'ch5-2',
+      'ch5-3',
+      'ch5-4',
+      'ch5-5',
+      'ch5-6',
     ])
   })
 
-  it('章节元信息：M4 起前三章可玩，综合挑战不参与主线排序', () => {
+  it('章节元信息：M5a 起 ch1~ch3 与 ch5 可玩，综合挑战不参与主线排序', () => {
     expect(getChapterMeta('ch1')?.playable).toBe(true)
     expect(getChapterMeta('ch1')?.order).toBe(1)
     expect(getChapterMeta('ch2')?.playable).toBe(true)
     expect(getChapterMeta('ch3')?.playable).toBe(true)
-    for (const id of ['ch4', 'ch5', 'ch6'] as ChapterId[]) {
+    // M5a 落地第五章（撤销章）
+    expect(getChapterMeta('ch5')?.playable).toBe(true)
+    expect(getChapterMeta('ch5')?.order).toBe(5)
+    // ch4（远程，M5b）与 ch6（标签，M6）尚未落地
+    for (const id of ['ch4', 'ch6'] as ChapterId[]) {
       expect(getChapterMeta(id)?.playable).toBe(false)
     }
     expect(getChapterMeta('F')?.order).toBeNull()
     expect(getChapterMeta('ch4')?.title.length).toBeGreaterThan(0)
+  })
+
+  it('章名与 GDD §4 逐字一致（M5a 统一了此前的双轨命名）', () => {
+    // ⚠️ 背景：代码侧章名曾是 M2 阶段自行拟定的，与 GDD 有四处不一致
+    // （见 development-refinement.md §3「章节命名双轨」表）。M5a 起以 GDD 为准。
+    const expected: Record<string, string> = {
+      ch1: '创世纪元',
+      ch2: '日常秩序',
+      ch3: '平行宇宙',
+      ch4: '星际连接',
+      ch5: '时空回溯',
+      ch6: '历史锚点',
+      F: '大统一',
+    }
+    for (const [id, title] of Object.entries(expected)) {
+      expect(getChapterMeta(id as ChapterId)?.title).toBe(title)
+    }
   })
 })
 
@@ -508,6 +548,8 @@ describe('关卡数据 —— relatedKnowledge 反查笔记', () => {
       ['git-basics', headingsOf('git-basics')],
       ['git-basic-operations', headingsOf('git-basic-operations')],
       ['git-branches', headingsOf('git-branches')],
+      // M5a：第五章接入 git-undo 笔记
+      ['git-undo', headingsOf('git-undo')],
     ])
 
     for (const [slug, heading] of Object.entries(SLUG_BY_HEADING)) {
@@ -639,8 +681,8 @@ describe('关卡数据 —— 第二、三章 id 与注册', () => {
     expect(getChapterLevels('ch2')).toHaveLength(4)
     expect(getChapterLevels('ch3')).toHaveLength(6)
     expect(getLevel('ch3-4')?.title).toBe('冲突消解')
-    // getAllLevels 覆盖三章共 14 关
-    expect(getAllLevels()).toHaveLength(14)
+    // getAllLevels 覆盖 ch1~ch3 与 ch5 共 20 关（ch4 属 M5b、ch6/F 属 M6）
+    expect(getAllLevels()).toHaveLength(20)
   })
 
   it('输入模式：ch2 全部拼接（menu），ch3 全部半拼（half）', () => {
@@ -904,5 +946,261 @@ describe('关卡数据 —— 第二、三章 relatedKnowledge 反查', () => {
     for (const level of [...CHAPTER_2_LEVELS, ...CHAPTER_3_LEVELS]) {
       expect(level.relatedKnowledge).toEqual(expected[level.id])
     }
+  })
+})
+
+// ── M5a：第五章「时空回溯」关卡数据 ────────────────────────────────────────
+
+describe('关卡数据 —— 第五章 id / 注册 / 输入模式', () => {
+  it('ch5 已注册：章节 playable 且 6 关可达、顺序正确', () => {
+    expect(getChapterMeta('ch5')?.playable).toBe(true)
+    expect(getChapterLevels('ch5')).toHaveLength(6)
+    expect(getChapterLevels('ch5').map((level) => level.id)).toEqual([
+      'ch5-1',
+      'ch5-2',
+      'ch5-3',
+      'ch5-4',
+      'ch5-5',
+      'ch5-6',
+    ])
+    expect(getLevel('ch5-6')?.title).toBe('时间跳跃')
+  })
+
+  it('ch5 全部为自由输入（free），且不提供半拼骨架（GDD §3.2 的演进末段）', () => {
+    for (const level of CHAPTER_5_LEVELS) {
+      expect(level.inputMode).toBe('free')
+      // 自由输入关卡不该有骨架 —— 有骨架会误导 UI 预填
+      expect(level.halfSkeleton).toBeUndefined()
+    }
+  })
+
+  it('ch5 难度按 GDD：5-1~5-3 为 ★★★/★★★★，5-4 起为 ★★★★ 以上', () => {
+    expect(getLevel('ch5-1')?.difficulty).toBe(3)
+    expect(getLevel('ch5-2')?.difficulty).toBe(3)
+    expect(getLevel('ch5-3')?.difficulty).toBe(4)
+    expect(getLevel('ch5-4')?.difficulty).toBe(4)
+    // 5-5「危险与安全」与 5-6「时间跳跃」是 GDD 标注的最高难度
+    expect(getLevel('ch5-5')?.difficulty).toBe(5)
+    expect(getLevel('ch5-6')?.difficulty).toBe(5)
+  })
+})
+
+describe('关卡数据 —— 第五章 schema 与命令集约束', () => {
+  it('6 关全部通过 validateLevel 校验', () => {
+    for (const level of CHAPTER_5_LEVELS) {
+      const result = validateLevel(level)
+      if (!result.ok) throw new Error(`${level.id} 校验失败：\n- ${result.errors.join('\n- ')}`)
+    }
+  })
+
+  it('ch5 的目标类型全部落在已实现范围内（未新增 TargetCondition 类型）', () => {
+    // M5 决策 ⑤：`reset --hard` 的「记错来源」不改 TargetCondition，
+    // 用现有类型组合表达。本用例是该决策的回归锁 —— 一旦有人加了新类型即失败。
+    for (const level of CHAPTER_5_LEVELS) {
+      for (const target of level.targets) {
+        expect(IMPLEMENTED_TARGET_TYPES).toContain(target.type)
+        expect(UNIMPLEMENTED_TARGET_TYPES).not.toContain(target.type)
+      }
+    }
+  })
+
+  it('ch5 每关都至少有一项「开局不成立」的推进判据（把关卡做实的底线）', () => {
+    // ⚠️ 这条断言不是「越多数越好」——5-1 有意只留一项（见其注释：其余判据
+    //    在当前 TargetCondition 能力下都会开局即达标，加了反而没有鉴别力）。
+    //    这里只守住「每关至少两项目标」的底线，5-1 是唯一的一项目标关卡。
+    for (const level of CHAPTER_5_LEVELS) {
+      const minimum = level.id === 'ch5-1' ? 1 : 2
+      expect(level.targets.length).toBeGreaterThanOrEqual(minimum)
+    }
+  })
+
+  it('ch5 的 init 不含未落地字段（tags / remotes / cloneSource 属 M5b/M6）', () => {
+    for (const level of CHAPTER_5_LEVELS) {
+      expect(level.init.tags ?? []).toEqual([])
+      expect(level.init.remotes ?? []).toEqual([])
+      expect(level.init.template).not.toBe('cloneSource')
+    }
+  })
+
+  it('ch5 的 relatedKnowledge 与核定映射一致（显式期望值，防漂移）', () => {
+    const expected: Record<string, string[]> = {
+      'ch5-1': ['git-undo#amend'],
+      'ch5-2': ['git-undo#unstage'],
+      'ch5-3': ['git-undo#restore'],
+      'ch5-4': ['git-undo#revert'],
+      'ch5-5': ['git-undo#reset-vs-revert'],
+      'ch5-6': ['git-undo#reflog'],
+    }
+    for (const level of CHAPTER_5_LEVELS) {
+      expect(level.relatedKnowledge).toEqual(expected[level.id])
+    }
+  })
+
+  it('ch5 的每个 slug 都能在 git-undo 笔记里反查到真实小节', () => {
+    for (const level of CHAPTER_5_LEVELS) {
+      for (const id of level.relatedKnowledge) {
+        const { note, slug } = splitKnowledgeId(id)
+        expect(note).toBe('git-undo')
+        const heading = SLUG_BY_HEADING[slug]
+        expect(heading, `slug ${slug} 未登记在 SLUG_BY_HEADING`).toBeDefined()
+        expect(
+          headingsOf(note).has(heading),
+          `${id} → "${heading}" 不在 docs/notes/${note}.md 中`,
+        ).toBe(true)
+      }
+    }
+  })
+})
+
+describe('关卡数据 —— 第五章可解性（真实引擎走通）', () => {
+  let caseIndexM5 = 0
+  async function freshSandboxM5(init: Level['init'] = {}): Promise<void> {
+    caseIndexM5 += 1
+    configureFs({ name: `levels-m5-${Date.now()}-${caseIndexM5}`, backend: new MemoryBackend() })
+    const result = await reset(init)
+    if (!result.ok) throw new Error(`沙箱初始化失败：${result.error.toString()}`)
+  }
+
+  it('6 关开局不得即达标', async () => {
+    for (const level of CHAPTER_5_LEVELS) {
+      await freshSandboxM5(level.init)
+      const state = await evaluateTargets(level)
+      const done = state.results.filter((result) => result.ok)
+      if (done.length !== 0) {
+        throw new Error(
+          `${level.id} 开局就已有 ${done.length} 项达标：` +
+            done.map((r) => `${r.target.type}（${r.detail}）`).join('、'),
+        )
+      }
+    }
+  })
+
+  it('6 关走参考解法后全部过关', async () => {
+    /** 编辑器动作：在第 N 条命令执行前写文件（before 为命令索引） */
+    type EditorAction = { before: number; path: string; content: string }
+    const plans: Record<string, { commands: string[]; edits: EditorAction[] }> = {
+      // 5-1：把漏掉的文件送进暂存区，再修补最近一次提交的信息
+      'ch5-1': {
+        commands: ['git add notes/附录.md', 'git commit --amend -m "修复日志 · 定稿"'],
+        edits: [],
+      },
+      // 5-2：先把草稿从暂存区退出来（保住工作区），再归档正式观测
+      'ch5-2': {
+        commands: [
+          // 玩家先在编辑器里把结论补完（edits），再把它 add 进暂存区（误加）
+          'git add notes/调试草稿.md',
+          // 把它退出来 —— 只动索引，刚写下的结论保持不动
+          'git restore --staged notes/调试草稿.md',
+          // 归档该归档的那份
+          'git add notes/观测补充.md',
+          'git commit -m "观测补充归档"',
+        ],
+        // 编辑器：把「排查中」的草稿补成结论版
+        edits: [{ before: 0, path: 'notes/调试草稿.md', content: STAGING_DRAFT_FINAL }],
+      },
+      // 5-3：改乱与误删由 init.dirty 预置，玩家只需两条 restore
+      'ch5-3': {
+        commands: ['git restore notes/时间线校准参数.md', 'git restore notes/关键档案.md'],
+        edits: [],
+      },
+      // 5-4：反向提交抵消有害改动
+      'ch5-4': {
+        commands: ['git revert HEAD'],
+        edits: [],
+      },
+      // 5-5：已同步历史只能用 revert
+      'ch5-5': {
+        commands: ['git revert HEAD'],
+        edits: [],
+      },
+      // 5-6：归档残片 → 误回退 → reflog 查看 → 用 HEAD@{1} 恢复
+      // （误操作不是过关的必需步骤，但它是本关的完整教学剧本，故参考解法走全流程）
+      'ch5-6': {
+        commands: [
+          'git add .',
+          'git commit -m "归档残片"',
+          'git reset --hard HEAD~2',
+          'git reflog',
+          'git reset --hard HEAD@{1}',
+        ],
+        edits: [],
+      },
+    }
+
+    const { fsp } = await import('../engine/fs')
+    for (const level of CHAPTER_5_LEVELS) {
+      await freshSandboxM5(level.init)
+      const plan = plans[level.id]
+      expect(plan, `${level.id} 缺少参考解法计划`).toBeDefined()
+
+      for (let i = 0; i < plan.commands.length; i += 1) {
+        for (const edit of plan.edits.filter((e) => e.before === i)) {
+          // content 为空串 = 模拟误删（unlink）
+          if (edit.content === '') {
+            await fsp.unlink(`/repo/${edit.path}`)
+          } else {
+            await fsp.writeFile(`/repo/${edit.path}`, edit.content, 'utf8')
+          }
+        }
+        const command = plan.commands[i]
+        const result = await execute(command)
+        if (!result.ok) {
+          throw new Error(`${level.id} 执行 ${command} 失败：${result.error ?? ''}`)
+        }
+      }
+
+      const state = await evaluateTargets(level)
+      if (!state.satisfied) {
+        const pending = state.results
+          .filter((r) => !r.ok)
+          .map((r) => `${r.target.type}：${r.detail}`)
+          .join('；')
+        throw new Error(`${level.id} 走完参考解法仍未过关：${pending}`)
+      }
+    }
+  })
+
+  it('5-4 用 reset 代替 revert 会判失败（区分两类撤销的教学点）', async () => {
+    // ⚠️ 这是 5-4 的核心教学判据：reset 会把提交数退回 2，而目标要求 eq 3。
+    await freshSandboxM5(assertValidLevel(getLevel('ch5-4')).init)
+    await execute('git reset --hard HEAD~1')
+    const state = await evaluateTargets(assertValidLevel(getLevel('ch5-4')))
+    expect(state.satisfied).toBe(false)
+    // 具体失败在 commitCount 上
+    const countResult = state.results.find((r) => r.target.type === 'commitCount')
+    expect(countResult?.ok).toBe(false)
+  })
+
+  it('5-6 的 reflog 剧本可行：误 reset --hard 后能凭 reflog 完整找回', async () => {
+    const level = assertValidLevel(getLevel('ch5-6'))
+
+    // ① 误操作：归档后一口气退掉两个快照 → 历史被破坏
+    await freshSandboxM5(level.init)
+    await execute('git add .')
+    await execute('git commit -m "归档残片"')
+    const beforeAccident = (await execute('git log --oneline')).output
+    expect(beforeAccident).toHaveLength(4)
+
+    await execute('git reset --hard HEAD~2')
+    const afterAccident = (await execute('git log --oneline')).output
+    expect(afterAccident).toHaveLength(2)
+    // 被退掉的两条提交确实不在历史里了
+    expect(afterAccident.join('\n')).not.toContain('关键快照三')
+    // 此时无法满足目标（提交数不足）
+    expect((await evaluateTargets(level)).satisfied).toBe(false)
+
+    // ② reflog 里能看到那次误操作，格式与笔记 git-undo.md 一致
+    const reflog = await execute('git reflog')
+    expect(reflog.output[0]).toMatch(/^[0-9a-f]{7} HEAD@\{0\}: reset: moving to HEAD~2$/)
+
+    // ③ 凭 reflog 找回 —— HEAD@{1} 即误操作之前的位置
+    const restored = await execute('git reset --hard HEAD@{1}')
+    expect(restored.ok).toBe(true)
+    const afterRestore = (await execute('git log --oneline')).output
+    expect(afterRestore).toHaveLength(4)
+    expect(afterRestore.join('\n')).toContain('关键快照三')
+
+    // ④ 完整剧本走完，关卡目标满足
+    expect((await evaluateTargets(level)).satisfied).toBe(true)
   })
 })

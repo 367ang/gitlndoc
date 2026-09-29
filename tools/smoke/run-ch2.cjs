@@ -2,7 +2,10 @@
  * 段1：ch2 全关冒烟（方案 A 分段版）
  *
  * 前置：Chrome headless + CDP（9223）已启动；Vite dev（5199）已启动。
- * 流程：种子 ch1 全通关 → 验 ch2 解锁 → 依次通关 2-1 ~ 2-4 → 断言汇总 8/14。
+ * 流程：种子 ch1 全通关 → 验 ch2 解锁 → 依次通关 2-1 ~ 2-4 → 断言汇总通关数。
+ *
+ * ⚠️ M5a：关卡总数从 14 变为 **20**（ch5 六关已注册），故汇总断言的
+ *    分母随之更新；通关数仍是 8（ch1 四关 + ch2 四关）。
  * 覆盖：章节解锁、probeBonus 场景（2-1 status 探查）、文件编辑器（2-2/2-4）、
  *       rm 真删（2-4）、.gitignore 生效（2-4 收尾 workdirClean）。
  */
@@ -11,6 +14,9 @@ const H = require('./cdp-client.cjs');
 (async () => {
   await H.connect();
   await H.installCounter();
+  // ⚠️ M5a：先清持久化进度，避免上一次冒烟留下的记录影响本次断言
+  //    （种子会整体覆盖 levelRecords，但快照与设置键仍可能残留）。
+  await H.resetStorage();
   await H.openApp();
 
   // ── 种子：ch1 全通关 → ch2 应解锁 ──
@@ -73,7 +79,8 @@ const H = require('./cdp-client.cjs');
   );
   H.check('ch2 全通关 → ch3 解锁', true);
   const summary = await H.evalJs(`document.querySelector('[data-testid="progress-summary"]')?.textContent ?? ''`);
-  H.check('汇总 8/14', summary.includes('通关 8/14'), summary.slice(0, 60));
+  // ⚠️ M5a：总关卡数 14 → 20（ch5 注册），通关数 8 不变
+  H.check('汇总 8/20', summary.includes('通关 8/20'), summary.slice(0, 60));
 
   const ok = H.summarize('段1 ch2');
   process.exit(ok ? 0 : 1);

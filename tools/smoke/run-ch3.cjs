@@ -4,13 +4,19 @@
  * 前置：同段1。种子 ch1+ch2 全通关 → ch3 应解锁。
  * 覆盖：半拼骨架预填（3-1~3-6 进关即断言 preview）、branch/checkout/switch、
  *       merge ff（3-3）、**冲突消解全链路（3-4）**、rebase + logOrder（3-5）、
- *       merge collaborative（3-6）、GitGraph/BranchPanel 渲染、汇总 14/14。
+ *       merge collaborative（3-6）、GitGraph/BranchPanel 渲染、汇总通关数。
+ *
+ * ⚠️ M5a：关卡总数 14 → **20**（ch5 六关已注册），故汇总断言的**分母**随之更新；
+ *    本段通关数是 14（ch1~ch3 全通关），分子不变。
  */
 const H = require('./cdp-client.cjs');
 
 (async () => {
   await H.connect();
   await H.installCounter();
+  // ⚠️ M5a：先清持久化进度，避免上一次冒烟留下的记录影响本次断言
+  //    （种子会整体覆盖 levelRecords，但快照与设置键仍可能残留）。
+  await H.resetStorage();
   await H.openApp();
 
   // ── 种子：ch1+ch2 全通关 → ch3 解锁 ──
@@ -112,10 +118,19 @@ const H = require('./cdp-client.cjs');
   await H.waitSettled('ch3-6');
   H.check('3-6 通关（merge collaborative）', true);
 
-  // ── 终态：14/14 ──
+  // ── 终态：ch1~ch3 共 14 关全部通关（总关卡数在 M5a 后为 20）──
   await H.backToMenu();
   const summary = await H.evalJs(`document.querySelector('[data-testid="progress-summary"]')?.textContent ?? ''`);
-  H.check('汇总 14/14（全部通关）', summary.includes('通关 14/14'), summary.slice(0, 60));
+  H.check('汇总 14/20（ch1~ch3 全部通关）', summary.includes('通关 14/20'), summary.slice(0, 60));
+
+  // ⚠️ M5a 追加：ch1~ch3 全通关后，ch5 应可进入（ch4 属 M5b、无关卡，
+  //    解锁规则会向前回溯到 ch3 —— 见 game/progression.ts 的修订说明）。
+  //    这是「第五章可玩」在真实浏览器里的端到端证据。
+  await H.waitFor(
+    `document.querySelector('[aria-label="查看章节 ch5 时空回溯"]')?.disabled === false`,
+    'ch1~ch3 全通关后 ch5 可进入（跳过尚未实现的 ch4）',
+  );
+  H.check('ch5 解锁（ch4 无关卡时向前回溯到 ch3）', true);
 
   // 控制台无异常（页面级捕获）
   const ok = H.summarize('段2 ch3');

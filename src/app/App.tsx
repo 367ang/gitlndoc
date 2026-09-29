@@ -3,7 +3,8 @@
 // 本应用不使用 react-router（§1 明确决策）：`viewStore.view` 即路由。
 //
 // ⚠️ boot 的职责（§5）：初始化 LightningFS 沙箱 → 加载持久化进度 → 决定进入 intro 还是 menu。
-// M2 只做第一步 + 分流；「加载持久化进度」属 M5（见下方 TODO）。
+// 沙箱初始化在 `main.tsx`（渲染前一次）；持久化加载也在 `main.tsx`（`hydrateProgress()`）；
+// 本组件只负责**分流**：`hasSavedProgress()` 为真进菜单，否则进 intro（M5a 落地）。
 // ⚠️ 初始化不可放进 React 的 effect：StrictMode 下 effect 会跑两遍，
 // 而 `sandbox.reset()` 会清空整个虚拟根 —— 重复执行会把玩家刚建立的仓库抹掉。
 // 故 boot 的初始化由入口 `main.tsx` 在挂载前完成一次，App 只做分流展示；
@@ -11,6 +12,7 @@
 
 import { useEffect, useState } from 'react'
 import { useViewStore } from '../store/viewStore'
+import { hasSavedProgress } from '../persistence/boot'
 import { MenuScreen } from '../ui/components/menu/MenuScreen'
 import { ChapterScreen } from '../ui/components/chapter/ChapterScreen'
 import { LevelScreen } from '../ui/components/level/LevelScreen'
@@ -38,10 +40,11 @@ export function App({ bootError }: AppProps) {
     if (booted) return
     setBooted(true)
 
-    // TODO(M5, §10)：此处应先读取 `gtp:progress:v1`（src/persistence/progress.ts），
-    // 有进度则 goMenu()，无进度则 goIntro()。persistence 属 M5，当前统一走 intro。
-    goIntro()
-  }, [booted, goIntro])
+    // M5a（§5 / §10）：按「是否有存档进度」分流 —— 有进度直接进菜单，
+    // 否则走 intro 的世界观引导。进度由 `main.tsx` 在渲染前 `hydrateProgress()` 载入。
+    if (hasSavedProgress()) goMenu()
+    else goIntro()
+  }, [booted, goIntro, goMenu])
 
   return (
     <div className={styles.app}>

@@ -1,6 +1,8 @@
 /**
  * 段3：1-4 完整通关补测（M3 遗留 1）+ 未通关时的锁定态断言。
  *
+ * ⚠️ M5a 起本段开头会 `resetStorage()` 清空持久化进度（进度已落 localStorage）。
+ *
  * M3 遗留：1-4「历史之链」的完整通关需要「制造新改动」的玩家手段 ——
  * M4 的文件编辑器（含新建文件入口）落地后补此验收。
  * 流程：不种任何进度（验证未通关时 ch2/ch3 锁定）→ 通关 1-1~1-3 →
@@ -11,6 +13,9 @@ const H = require('./cdp-client.cjs');
 (async () => {
   await H.connect();
   await H.installCounter();
+  // ⚠️ M5a：本段断言「无进度时 ch2 锁定」，故必须先清掉持久化进度 ——
+  //    否则上一次冒烟留下的记录会让 ch2 直接是解锁态（实测失败）。
+  await H.resetStorage();
   await H.openApp();
 
   // ── 无进度：ch2/ch3 锁定 ──

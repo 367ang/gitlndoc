@@ -21,6 +21,7 @@
 
 import { getLevel } from '../levels/chapters'
 import { reset } from '../engine/sandbox'
+import { clearSnapshot } from '../persistence/snapshot'
 import { useSessionStore } from '../store/sessionStore'
 import { useProgressStore } from '../store/progressStore'
 import { useViewStore } from '../store/viewStore'
@@ -44,6 +45,14 @@ export async function startLevel(levelId: string): Promise<StartLevelResult> {
     return { ok: false, error: `找不到关卡 ${levelId}，可能是关卡数据与菜单不同步。` }
   }
 
+  // 0) 清掉上一关的快照（M5a，§10「退出关卡清除」）。
+  //    本函数既是「进入某关」的入口，也就是「离开上一关」的唯一路径 ——
+  //    快照的清理挂在起点而不是各处的返回按钮上，避免遗漏某条退出路径。
+  const previousLevel = useSessionStore.getState().level?.id
+  if (previousLevel !== undefined && previousLevel !== level.id) {
+    await clearSnapshot(previousLevel)
+  }
+
   // 1) 重建沙箱：清空虚拟根后按 level.init 写入文件与预置提交
   try {
     const result = await reset(level.init)
@@ -60,8 +69,8 @@ export async function startLevel(levelId: string): Promise<StartLevelResult> {
   session.resetDraft()
   // 结算信息复位（M3）：提示计数清零；firstAttempt 按进度库判定 ——
   // 该关已有通关记录（重玩）或本会话内已进过（重试）都算「非首次」。
-  // 注：重启浏览器后 firstAttempt 会重新变 true（进度持久化属 M5），
-  // 届时「first-try 成就」的判定口径需随持久化一起复核。
+  // ⚠️ M5a 复核（清偿 M3 遗留 2）：进度已持久化，故**重启浏览器后**重玩某关
+  //    依然会读到 cleared 记录 → firstAttempt 为 false，不再被误判为首次尝试。
   const clearedBefore = useProgressStore.getState().levelRecords[level.id]?.cleared === true
   session.setSettlement({ hintsUsed: 0, firstAttempt: !clearedBefore })
 

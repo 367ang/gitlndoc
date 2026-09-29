@@ -21,9 +21,23 @@ const WS_URL_OK = true;
 let ws = null;
 let msgId = 0;
 const pending = new Map();
+/**
+ * `Page.loadEventFired` 的一次性回调（由 `reload()` 注册）。
+ * ⚠️ CDP 事件没有 id，无法走 `pending` 表，故单列一个变量。
+ */
+let onLoadFired = null;
 
 function onMessage(raw) {
   const msg = JSON.parse(typeof raw === 'string' ? raw : String(raw));
+
+  // CDP 事件（无 id）：目前只关心页面加载完成
+  if (msg.method === 'Page.loadEventFired' && typeof onLoadFired === 'function') {
+    const callback = onLoadFired;
+    onLoadFired = null;
+    callback();
+    return;
+  }
+
   if (msg.id && pending.has(msg.id)) {
     const { resolve } = pending.get(msg.id);
     pending.delete(msg.id);
@@ -171,9 +185,13 @@ async function enterLevel(levelId, levelTitle) {
       return 1;
     })()`);
   }
-  // 条件等待：关卡页就绪 = 命令预览出现 **且** 页面含该关卡 id（顶栏）
+  // 条件等待：关卡页就绪 —— 页面含该关卡 id（顶栏）**且**某一种输入组件已挂载。
+  // ⚠️ 判据必须区分输入模式（M5a 实测）：
+  //    - menu / half 模式渲染 CommandBuilder → `[data-testid="command-preview"]`；
+  //    - **free 模式（第五章起）渲染 Terminal → `[aria-label="命令输入"]`**，
+  //      此时 command-preview **根本不存在**，沿用旧判据会必然超时。
   await waitFor(
-    `!!document.querySelector('[data-testid="command-preview"]') && document.body.innerText.includes('${levelId}')`,
+    `(!!document.querySelector('[data-testid="command-preview"]') || !!document.querySelector('[aria-label="命令输入"]')) && document.body.innerText.includes('${levelId}')`,
     `进入关卡 ${levelId}`,
   );
 }
@@ -364,6 +382,67 @@ async function runGit(verb, arg = '') {
   await runCommand();
 }
 
+
+/* ── free 模式（第五章起）───────────────────────────────────────────── */
+
+/**
+ * 在 free 模式的 Terminal 里输入并执行一整条命令。
+ *
+ * ⚠️ 为什么必须走真实键盘输入（CDP `Input.insertText`）：
+ *   jsdom 的 `fireEvent.change` **不受 `readOnly` 限制**，会掩盖「玩家无法输入」
+ *   这类缺陷（M2 教训 3）。free 模式的 Terminal 用受控 `<input>`，
+ *   直接赋 value 不会触发 React 状态更新，故必须走原生输入通道。
+ *
+ * ⚠️ 每次执行前必须清空输入框：Terminal 在成功执行后会清空，但**失败时保留**
+ *   （便于玩家改错），若不清就会把上一条失败的命令和新命令拼在一起。
+ */
+async function runFree(input) {
+  // 等输入框就绪（自由输入关卡的关卡页）
+  await waitFor(`!!document.querySelector('[aria-label="命令输入"]')`, '自由输入框就绪');
+  const before = await histCount();
+
+  // 清空（受控组件：走原生 setter + input 事件，与 editFile 同一套办法）
+  await evalJs(`(() => {
+    const el = document.querySelector('[aria-label="命令输入"]');
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(el, '');
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.focus();
+    return true;
+  })()`);
+  await sleep(60);
+
+  // 真实键盘输入
+  await send('Input.insertText', { text: input });
+  await sleep(80);
+
+  await evalJs(`(() => {
+    const btn = [...document.querySelectorAll('button')].find(b => b.textContent.trim() === '执行');
+    if (!btn) throw new Error('找不到「执行」按钮');
+    btn.click();
+    return true;
+  })()`);
+
+  await waitFor(`(async () => {
+    const mod = await import('/src/store/sessionStore.ts');
+    return mod.useSessionStore.getState().history.length > ${before};
+  })()`, `命令执行完成：${input}`);
+  await sleep(300); // 目标检测防抖
+  return latestHistory();
+}
+
+/** 读最近一条命令历史（用于断言输出 / 报错） */
+async function latestHistory() {
+  return evalJs(`(async () => {
+    const mod = await import('/src/store/sessionStore.ts');
+    const h = mod.useSessionStore.getState().history;
+    const last = h[h.length - 1];
+    return last ? { input: last.input, ok: last.ok, output: last.output, error: last.error ?? null } : null;
+  })()`);
+}
+
+/** 从菜单/结算页进入某关（结算页走「返回菜单」） */
+
 /* ── 启动引导 ─────────────────────────────────────────────────────────── */
 
 /**
@@ -378,6 +457,70 @@ async function histCount() {
   })()`);
 }
 
+/**
+ * 清空应用的持久化状态并 **reload**（M5a 新增）。
+ *
+ * ⚠️ M5a 起进度会落 localStorage（`gtp:progress:v1`），于是**上一次冒烟跑完的进度
+ * 会被下一次读到** —— 依赖「全新玩家」假设的断言（如段3 的「无进度时 ch2 锁定」）
+ * 因此失败（实测）。本函数把应用恢复到真正的初始态：
+ *   1. 清掉进度 / 成就 / 设置三个键；
+ *   2. 删除 `gtp:snapshot:*` 的 IndexedDB 快照库；
+ *   3. reload，让 store 以空进度重建。
+ *
+ * 调用方应在 `openApp()` **之前**用「先导航 → 清 → reload」的顺序执行，
+ * 故这里自己负责导航（storage 是 per-origin 的，必须先有页面）。
+ */
+async function resetStorage() {
+  // 先确保有一个同源页面（storage / indexedDB 都是 per-origin）
+  await send('Page.navigate', { url: APP });
+  await waitFor(`document.readyState !== 'loading'`, '页面就绪（为清 storage 做准备）', 20000);
+  await sleep(200);
+
+  await evalJs(`(() => {
+    try {
+      ['gtp:progress:v1', 'gtp:achievements:v1', 'gtp:settings:v1'].forEach((k) => localStorage.removeItem(k));
+    } catch (e) { /* storage 不可用时忽略 */ }
+    return true;
+  })()`);
+
+  // 删除快照库（best-effort：onblocked 时立即放行，绝不挂住）
+  await evalJs(`(async () => {
+    if (typeof indexedDB === 'undefined' || typeof indexedDB.databases !== 'function') return true;
+    const dbs = await indexedDB.databases();
+    await Promise.all(dbs
+      .map((d) => d.name)
+      .filter((n) => typeof n === 'string' && n.startsWith('gtp:snapshot:'))
+      .map((n) => new Promise((resolve) => {
+        const r = indexedDB.deleteDatabase(n);
+        r.onsuccess = r.onerror = r.onblocked = () => resolve();
+      })));
+    return true;
+  })()`);
+
+  await reload();
+  await sleep(300);
+}
+
+/**
+ * 重新加载当前页面并等待加载完成。
+ *
+ * ⚠️ 不可用 `evalJs('location.reload()')`：页面上下文会在求值途中被销毁，
+ * 该 CDP 调用因此**永不返回**，调用方会静默挂死（M5a 实测踩到）。
+ * 这里改走 `Page.navigate` + 等 `Page.loadEventFired`。
+ */
+async function reload() {
+  const loaded = new Promise((resolve) => {
+    const timer = setTimeout(resolve, 10000); // 兜底：极端情况下不永久等待
+    onLoadFired = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+  });
+  await send('Page.navigate', { url: APP });
+  await loaded;
+  return waitFor(`document.readyState === 'complete'`, 'reload 后文档就绪', 20000);
+}
+
 /** installCounter 保留为空实现（向后兼容；计数已内建到 histCount） */
 async function installCounter() {}
 
@@ -386,5 +529,7 @@ module.exports = {
   check, summarize, results,
   seedProgress, enterLevel, waitSettled, backToMenu,
   clickFrag, runCommand, typeSuffix, editFile, runAdd, runCommit, runGit,
+  // free 模式（第五章起）
+  runFree, latestHistory, reload, resetStorage,
   installCounter,
 };

@@ -18,7 +18,7 @@
 
 ## 当前状态
 
-**M1（地基）～ M4（第 2–3 章、GitGraph、BranchPanel、Tab 补全、文件编辑）均已完成**，三门禁当前为 **`typecheck` 0 / `test` 228 passed / `build` ≈170 kB gzip**（M4 实测）。下一阶段为 **M5（撤销与远程、快照持久化）**。
+**M1（地基）～ M4（第 2–3 章、GitGraph、BranchPanel、Tab 补全、文件编辑）与 M5a（第五章「时空回溯」+ 快照持久化）均已完成**，三门禁当前为 **`typecheck` 0 / `test` 317 passed / `build` 178.26 kB gzip**（M5a 实测）。下一阶段为 **M5b（第四章「星际连接」+ 本地远程客户端）**。
 
 各里程碑的**产出、三门禁历史、实测环境事实与遗留移交**见 **`docs/milestones/README.md`**（索引）与 `docs/milestones/M*-tasks.md`（各期详情），本文件不复述。
 
@@ -30,6 +30,16 @@
 4. LightningFS 对**目录**调 `readFile` 返回 `null` 而非抛错，判存在性必须用 `stat`。
 5. `evaluateTarget` 接收 `options`（branch/merged/logOrder 需读仓库）；关卡预置提交**每个都必须带 files**（空提交防御），`on` 缺省回 main。
 
+**M5a 新增的引擎事实（第五章「时空回溯」的全部依据）：**
+
+6. **`resolveRef` 不支持任何 ref 表达式**：`HEAD~1` / `HEAD^` / `HEAD@{n}` / 短 hash **全部抛 `NotFoundError`**（逐一实测）。`engine/refExpr.ts` 为此自研；短 hash 可经 `git.expandOid` 还原。**第五章的核心命令（`git reset --soft HEAD~1`、`git reset --hard HEAD@{n}`）全依赖这一层。**
+7. **`HEAD@{n}` 的语义 =「倒数第 n+1 条 reflog 记录的 `to`」**（以真 git 的 `git rev-parse HEAD@{n}` 实测校准）。曾误以为要取 `from`，导致恢复剧本接到错误提交 —— ⚠️ 单看 `@{0}` 恰好也对，**只有 `@{1}` 会露馅**。
+8. **`git commit({ amend: true })` 可用，但不复刻真 git 的「无内容可修补」拒绝**：真 git 报 `You have nothing to amend`，isomorphic-git 照样产出新提交 —— M5a 已在 `gitApi.commit` 补空修补防御（复用 `status()` 的 `staged` 判据）。
+9. **`reset` 三模式的底层组合**（实测与笔记 `git-undo.md` 的模式对比表逐格吻合）：`--soft` = 只 `writeRef`；`--mixed` = `writeRef` + **逐文件** `git.resetIndex({ filepath })`（⚠️ 省略 `filepath` 抛 `MissingParameterError`）；`--hard` = `writeRef` + `checkout({ force: true })`。
+10. **`LevelInit.dirty`（M5a 新增字段）**：`commits` 只能预置「已归档的正确状态」、`files` 只能预置「未追踪的新文件」，**都无法表达「已追踪文件的工作区被改写 / 被误删」** —— 而第五章的叙事前提正是「错误已经发生」。`dirty` 在所有预置提交之后执行；`null` 值走 `fsp.unlink` 而非 `git rm`（后者会把删除记进索引，玩家就不需要「恢复」了）。
+11. **测试环境的 `localStorage`**：本仓库的 jsdom（30.x）**不提供 `window.localStorage`**（`typeof localStorage === 'undefined'`，不是抛错）。`src/__tests__/setup.ts` 已注入内存垫片，**不可删**（与 `fake-indexeddb/auto` 同理）。
+12. **`smoke` 脚本必须在开头 `resetStorage()`**：M5a 起进度落 localStorage，上次冒烟留下的记录会被下次读到（段3 的「无进度时 ch2 锁定」因此失败，实测）。
+
 > 另需注意：`development-refinement.md` §8 的「主要命令集」列曾与 GDD 不一致 —— 第一章被误写为 `init, status, log`、第二章被误写为 `add, commit, .gitignore`，**已于 M2 开工前按 GDD 订正**为「一：`init, add, commit`」「二：`status, diff, log, rm, .gitignore`」。§8 是逐章核对过的，其余行与 GDD 一致（个别概括性差异，如三章未列 `switch`、六章列了 `show`/`describe`，属「主要命令」的合理列举）。**若再改 §8，务必与 `game-design.md` 第 4 节的关卡表逐行比对。**
 
 ## 命令
@@ -40,9 +50,10 @@ pnpm build           # tsc -b && vite build（构建包含类型检查）
 pnpm preview         # 预览生产构建产物
 pnpm typecheck       # tsc --noEmit（不产出文件的快速类型检查，提交前运行）
 pnpm test            # Vitest（watch 模式）；CI/单次运行用 `pnpm test:run` 或 `pnpm vitest run <file>`
-pnpm smoke:legacy    # 真实浏览器冒烟（真实 Chrome + CDP）；三段独立运行，见 tools/smoke/README.md
+pnpm smoke:legacy    # 真实浏览器冒烟（真实 Chrome + CDP）；四段独立运行，见 tools/smoke/README.md
 pnpm smoke:ch2
 pnpm smoke:ch3
+pnpm smoke:ch5       # M5a 新增（第五章六关 + 持久化 reload 复核）
 ```
 
 包管理器：**统一使用 pnpm**（与工程文档 §12 的技术选型一致）。`package.json` 中的 `scripts` 字段供 pnpm 调用，不要改用 npm。
@@ -53,7 +64,7 @@ pnpm smoke:ch3
 > ```
 > 同一原因也会导致 `gh` 不可见（影响推送）。
 
-测试运行器已在 M1 配好：**Vitest + @testing-library/react**（`vite.config.ts` 的 `test` 字段，`environment: 'jsdom'`，`globals: true`），测试置于 `src/__tests__/`。**M4 后共 7 个文件**：`tokenize.test.ts`(22)、`executor.test.ts`(51)、`targetState.test.ts`(32)、`components.test.tsx`(50)、`levels.test.ts`(40)、`scoring.test.ts`(21)、`inputMode.test.ts`(12) 全部为真实用例（**228 passed**，无 todo）。
+测试运行器已在 M1 配好：**Vitest + @testing-library/react**（`vite.config.ts` 的 `test` 字段，`environment: 'jsdom'`，`globals: true`），测试置于 `src/__tests__/`。**M5a 后共 10 个文件**：`tokenize.test.ts`(22)、`executor.test.ts`(71)、`targetState.test.ts`(32)、`components.test.tsx`(50)、`levels.test.ts`(54)、`scoring.test.ts`(21)、`inputMode.test.ts`(12)、`refExpr.test.ts`(24)、`persistence.test.ts`(22)、`progression.test.ts`(9) 全部为真实用例（**317 passed**，无 todo）。
 
 > ⚠️ `src/__tests__/setup.ts` 里的 `import 'fake-indexeddb/auto'` **不可删除**：jsdom 不提供 `navigator.locks`，LightningFS 的 `DefaultBackend` 会因此回落到需要 `indexedDB` 的 `Mutex` 分支，删掉即全部测试报 `ReferenceError: indexedDB is not defined`。机理详见 `docs/milestones/M1-tasks.md` 的「实测环境事实」第 2 条。
 

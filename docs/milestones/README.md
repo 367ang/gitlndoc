@@ -15,7 +15,7 @@
 | M2（关卡框架） | [M2-tasks.md](M2-tasks.md) | ✅ 完成 | `levels/schema.ts` + 第一章 4 关 + Terminal/FileTree/GoalPanel + 目标检测，第一章（菜单式）可玩 |
 | M3（计分） | [M3-tasks.md](M3-tasks.md) | ✅ 完成 | 计分引擎（`evaluateScore`/`starsOf`）+ 5 成就 + 结算 UI + 空提交引擎修复 |
 | M4（第 2–3 章） | [M4-tasks.md](M4-tasks.md) | ✅ 完成 | ch2 四关 + ch3 六关 + GitGraph + BranchPanel + Tab 补全 + 文件编辑器（含新建文件）+ 章节解锁 |
-| M5（撤销与远程、快照持久化） | — | ⏳ 未开始 | 下一阶段；开工时在本目录新建 `M5-tasks.md` |
+| M5（撤销与远程、快照持久化） | [M5-tasks.md](M5-tasks.md) | 🚧 M5a ✅ / M5b ⏳ | **拆为两批**：**M5a ✅** 第五章 6 关（reset/restore/amend/revert/reflog）+ 快照持久化；**M5b ⏳** 第四章 5 关 + 本地远程客户端 |
 
 ### M1 两篇文档的关系
 
@@ -30,7 +30,8 @@
 | M1 | 0 错误 | 49 passed \| 34 todo | 145.23 kB |
 | M2 | 0 错误 | 141 passed \| 12 todo | 约 153.8 kB |
 | M3 | 0 错误 | 176 passed，0 todo | 157.53 kB |
-| M4 | 0 错误 | **228 passed**，0 todo | 169.76 kB |
+| M4 | 0 错误 | 228 passed，0 todo | 169.76 kB |
+| M5a | 0 错误 | **317 passed**，0 todo | **178.26 kB** |
 
 构建预算见 `development-refinement.md` §12（约 350 kB），当前余量充足。
 
@@ -40,4 +41,5 @@
 |---|---|---|
 | M2 | 17/18（唯一「失败」为验收脚本自身查询时机问题，非应用缺陷） | `pnpm dev` + 真实 Chrome headless + CDP，`Input.insertText` 真实键盘输入 |
 | M3 | 20/20 | 沿 M2 方法 |
-| M4 | **分段 30/30**（两轮连跑无 flake） | 方案 A：进度种子 + 条件轮询 + data 属性定位，脚本见 [tools/smoke/](../../tools/smoke/README.md) |
+| M4 | 分段 30/30（两轮连跑无 flake） | 方案 A：进度种子 + 条件轮询 + data 属性定位，脚本见 [tools/smoke/](../../tools/smoke/README.md) |
+| M5a | **四段 64/64**（ch5 段两轮连跑无 flake） | 沿 M4 方案；新增 `smoke:ch5`（33 断言）+ free 模式真实键盘输入 + 持久化 reload 复核 |

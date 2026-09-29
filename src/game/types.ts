@@ -50,6 +50,25 @@ export interface LevelInit {
   branches?: { name: string; from: string }[] // 预置分支
   tags?: { name: string; at: string }[]
   remotes?: { name: string; url: string }[]
+  /**
+   * 预置「工作区被搞乱」的状态（M5a，服务第五章「时空回溯」）。
+   *
+   * ⚠️ 为什么需要这个字段：第五、章的叙事前提是**错误已经发生** ——
+   * 文件被改乱、被删除、被误 add。而 `commits` 只能预置「已归档的正确状态」，
+   * `files` 只能预置「未追踪的新文件」——**都无法表达「已追踪文件的工作区被改写」**。
+   *
+   * 语义：在**所有预置提交完成之后**执行（区别于 `files` 在提交之前写入）：
+   *   - 值为字符串 → 覆盖该路径的工作区内容（对已追踪文件即「有未暂存改动」）；
+   *   - 值为 `null`   → 从工作区删除该文件（模拟误删；索引与 HEAD 仍保留）。
+   *
+   * 写法与 `files` 一致（仓库相对路径 → 内容），便于关卡作者对照阅读。
+   *
+   * @example 5-3「丢弃改动」：把已归档的参数改乱，并删掉另一份档案
+   * ```ts
+   * dirty: { 'notes/参数.md': '跑偏了\n', 'notes/关键档案.md': null }
+   * ```
+   */
+  dirty?: Record<string, string | null>
 }
 
 /** 计分参数（§7） */

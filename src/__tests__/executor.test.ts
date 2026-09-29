@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import * as LightningFsNS from '@isomorphic-git/lightning-fs';
 import { execute, executeToEntry } from '../game/command/executor';
 import { configureFs, fsp, type FsIdb } from '../engine/fs';
+import { clearReflog } from '../engine/reflog';
 
 // ⚠️ 为什么不用 `import { MemoryBackend } from '@isomorphic-git/lightning-fs'`：
 // 该包的运行时确实导出了 `MemoryBackend`（见其 `src/index.js` 末尾的具名导出），
@@ -271,15 +272,25 @@ describe('executor —— 错误路径', () => {
     expect(result.error).toContain('需要跟上子命令');
   });
 
-  it('M4 起仍不支持的子命令返回「该版本不支持」而非执行（M4 已实现 branch/checkout/merge）', async () => {
-    // M4 把 branch / checkout / merge / rebase / rm / diff 转正后，
-    // 白名单外仍剩 reset / revert / stash / tag / remote / push / fetch / pull（M5/M6）。
-    for (const input of ['git reset', 'git revert HEAD', 'git stash', 'git push origin main']) {
+  it('白名单外仍不支持的子命令返回「该版本不支持」而非执行（M5a 已实现 reset/restore/revert/reflog）', async () => {
+    // M5a 把第五章的 reset / restore / revert / reflog 转正后，白名单外仍剩
+    // stash / tag / remote / push / fetch / pull（tag 属 M6，远程属 M5b）。
+    // ⚠️ 原用例的输入集合含 `git reset` 与 `git revert HEAD` —— M5a 起两者已转正，
+    //    不再报「不支持」（`git reset` 无目标时改报「请指定要回退到的目标」），故收缩之。
+    for (const input of ['git stash', 'git tag v1.0', 'git push origin main', 'git fetch']) {
       const result = await execute(input, { dir });
       expect(result.ok).toBe(false);
       expect(result.error).toContain('在当前版本中尚不支持');
       expect(result.output).toEqual([]);
     }
+  });
+
+  it('git reset 不带目标时给出用法提示（M5a 起 reset 已转正，不再是「不支持」）', async () => {
+    await execute('git init', { dir });
+    const result = await execute('git reset', { dir });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('请指定要回退到的目标');
+    expect(result.error).not.toContain('尚不支持');
   });
 
   it('未闭合引号在 executor 层即被拦下（走 tokenizeDetailed）', async () => {
@@ -313,15 +324,69 @@ describe('executor —— 错误路径', () => {
     expect(result.output).toEqual([]);
   });
 
-  it('commit --amend 明确回「不支持」（属 M5 范围）', async () => {
+  it('commit --amend 替换最近一次提交：旧提交成为孤儿、父提交不变（M5a 转正）', async () => {
+    // ⚠️ 本用例原为「commit --amend 明确回「不支持」（属 M5 范围）」——
+    //    M5a 落地 `--amend` 后该断言已过时，改为验证真实语义。
+    await execute('git init', { dir });
+    await writeRepoFile('/repo/a.txt', '第一版\n');
+    await execute('git add .', { dir });
+    await execute('git commit -m "第一个提交"', { dir });
+    await writeRepoFile('/repo/a.txt', '第二版\n');
+    await execute('git add .', { dir });
+    await execute('git commit -m "写错的提交信息"', { dir });
+
+    const before = (await execute('git log --oneline', { dir })).output.slice();
+    expect(before).toHaveLength(2);
+    const orphan = before[0].split(' ')[0];
+
+    // 只改提交信息
+    const amended = await execute('git commit --amend -m "修正后的提交信息"', { dir });
+    expect(amended.ok).toBe(true);
+    expect(amended.output.join('\n')).toContain('修正后的提交信息');
+
+    const after = (await execute('git log --oneline', { dir })).output.slice();
+    // 提交数不变（替换而非追加）
+    expect(after).toHaveLength(2);
+    // 旧提交消失、新提交出现在同一位置
+    expect(after[0]).toContain('修正后的提交信息');
+    expect(after[0]).not.toBe(before[0]);
+    expect(after[0].split(' ')[0]).not.toBe(orphan);
+    // 父提交（第一个提交）保持不变
+    expect(after[1]).toBe(before[1]);
+  });
+
+  it('commit --amend --no-edit 沿用原提交信息（笔记 5-1 的第二场景）', async () => {
+    await execute('git init', { dir });
+    await writeRepoFile('/repo/a.txt', '内容\n');
+    await execute('git add .', { dir });
+    await execute('git commit -m "添加功能"', { dir });
+
+    // 漏了一个文件，补进来后沿用原信息
+    await writeRepoFile('/repo/b.txt', '遗漏的文件\n');
+    await execute('git add b.txt', { dir });
+    const amended = await execute('git commit --amend --no-edit', { dir });
+    expect(amended.ok).toBe(true);
+
+    const log = (await execute('git log --oneline', { dir })).output;
+    expect(log).toHaveLength(1);
+    expect(log[0]).toContain('添加功能');
+    // 修补后的快照确实包含了补进来的文件
+    const status = (await execute('git status', { dir })).output.join('\n');
+    expect(status).toContain('干净');
+  });
+
+  it('空修补被拒绝：既无暂存改动、提交信息也未变（对齐真 git 的 nothing to amend）', async () => {
+    // ⚠️ 探针实测：isomorphic-git 的 amend **不复刻**真 git 的这条拒绝，
+    //    会照样产出新提交（见 docs/milestones/M5-tasks.md §六 第 8 条）。
+    //    若不拦，5-1 可被「什么都不改直接 --amend」蒙过去。
     await execute('git init', { dir });
     await writeRepoFile('/repo/a.txt', '内容\n');
     await execute('git add .', { dir });
     await execute('git commit -m "初始提交"', { dir });
 
-    const result = await execute('git commit --amend -m "修补"', { dir });
+    const result = await execute('git commit --amend -m "初始提交"', { dir });
     expect(result.ok).toBe(false);
-    expect(result.error).toContain('尚不支持');
+    expect(result.error).toContain('没有可修补的内容');
   });
 
   // ── 空提交防御（M3 修复 M2 §5.1 的引擎保真缺陷，回归用例） ──────────────────
@@ -942,5 +1007,373 @@ describe('sandbox —— M4 分支化预置模型', () => {
     // spare 是空分支（与 main 同头）
     const branches = await execute('git branch', { dir });
     expect(branches.output.join('\n')).toContain('spare');
+  });
+});
+
+// ── M5a：第五章「时空回溯」的四个撤销命令 ─────────────────────────────────
+//
+// ⚠️ 这些用例是**笔记到引擎的对照锁**：`docs/notes/git-undo.md` 里的「模式对比表」
+// 与「reflog 恢复」剧本必须能在本引擎上逐格复现，否则第五章的关卡设计没有依据。
+// 三模式的三态（工作区 / 暂存区 / 提交历史）逐一断言。
+
+describe('executor —— M5a 撤销：reset 三模式', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = freshRepo();
+  });
+
+  /** 建三个提交：每个提交改写 a.txt 并新增一个文件，便于观察各模式的影响面 */
+  async function threeCommits(): Promise<void> {
+    await execute('git init', { dir });
+    await writeRepoFile('/repo/a.txt', 'v1\n');
+    await execute('git add .', { dir });
+    await execute('git commit -m "第一"', { dir });
+
+    await writeRepoFile('/repo/a.txt', 'v2\n');
+    await execute('git add .', { dir });
+    await execute('git commit -m "第二"', { dir });
+
+    await writeRepoFile('/repo/a.txt', 'v3\n');
+    await execute('git add .', { dir });
+    await execute('git commit -m "第三"', { dir });
+  }
+
+  it('--hard：提交、暂存区、工作区三处一起回退（笔记对比表：清空/清空/回退）', async () => {
+    await threeCommits();
+
+    const result = await execute('git reset --hard HEAD~1', { dir });
+    expect(result.ok).toBe(true);
+    expect(result.output.join('\n')).toContain('丢弃');
+
+    const log = (await execute('git log --oneline', { dir })).output;
+    expect(log).toHaveLength(2);
+    expect(log.join('\n')).not.toContain('第三');
+
+    // 工作区真的回到了 v2（这是 --hard 与 --soft/--mixed 的关键差别）
+    expect(await fsp.readFile('/repo/a.txt', 'utf8')).toBe('v2\n');
+    // 工作区干净
+    expect((await execute('git status', { dir })).output.join('\n')).toContain('干净');
+  });
+
+  it('--soft：只回退提交历史，工作区与暂存区都保留（笔记对比表：保留/保留/回退）', async () => {
+    await threeCommits();
+
+    const result = await execute('git reset --soft HEAD~1', { dir });
+    expect(result.ok).toBe(true);
+
+    const log = (await execute('git log --oneline', { dir })).output;
+    expect(log).toHaveLength(2);
+
+    // 工作区仍是 v3，且改动**留在暂存区**（`git status -s` 首列非空）
+    expect(await fsp.readFile('/repo/a.txt', 'utf8')).toBe('v3\n');
+    const short = (await execute('git status -s', { dir })).output;
+    expect(short.join('\n')).toContain('M  a.txt');
+    const status = (await execute('git status', { dir })).output.join('\n');
+    expect(status).toContain('要提交的变更');
+  });
+
+  it('--mixed（缺省）：回退提交与暂存区，工作区保留（笔记对比表：保留/清空/回退）', async () => {
+    await threeCommits();
+
+    // 不写模式 = 真 git 的默认 --mixed
+    const result = await execute('git reset HEAD~1', { dir });
+    expect(result.ok).toBe(true);
+
+    const log = (await execute('git log --oneline', { dir })).output;
+    expect(log).toHaveLength(2);
+
+    // 工作区仍是 v3，但改动**退回未暂存**
+    expect(await fsp.readFile('/repo/a.txt', 'utf8')).toBe('v3\n');
+    const short = (await execute('git status -s', { dir })).output;
+    expect(short.join('\n')).toContain(' M a.txt');
+    const status = (await execute('git status', { dir })).output.join('\n');
+    expect(status).toContain('尚未暂存');
+  });
+
+  it('reset 支持 HEAD@{n} 与提交 hash 形式的目标', async () => {
+    await threeCommits();
+    const logBefore = (await execute('git log --oneline', { dir })).output;
+    const firstHash = logBefore[2].split(' ')[0];
+
+    // 用 reflog 表达式回退（5-6 的关键路径）
+    const byReflog = await execute('git reset --hard HEAD@{0}', { dir });
+    expect(byReflog.ok).toBe(true);
+
+    // 用提交 hash 回退到第一个提交
+    const byHash = await execute(`git reset --hard ${firstHash}`, { dir });
+    expect(byHash.ok).toBe(true);
+    expect((await execute('git log --oneline', { dir })).output).toHaveLength(1);
+  });
+
+  it('回溯超过历史起点时报错（对齐真 git 的 unknown revision）', async () => {
+    await execute('git init', { dir });
+    await writeRepoFile('/repo/a.txt', 'v1\n');
+    await execute('git add .', { dir });
+    await execute('git commit -m "唯一提交"', { dir });
+
+    const result = await execute('git reset --hard HEAD~3', { dir });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('超出了历史起点');
+  });
+});
+
+describe('executor —— M5a 撤销：restore 与 checkout --', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = freshRepo();
+  });
+
+  it('restore <file>：丢弃工作区改动，回到暂存区的版本', async () => {
+    await execute('git init', { dir });
+    await writeRepoFile('/repo/a.txt', '入库版本\n');
+    await execute('git add .', { dir });
+    await execute('git commit -m "初始提交"', { dir });
+
+    // 改写工作区但不暂存
+    await writeRepoFile('/repo/a.txt', '被改乱了\n');
+    expect(await fsp.readFile('/repo/a.txt', 'utf8')).toBe('被改乱了\n');
+
+    const result = await execute('git restore a.txt', { dir });
+    expect(result.ok).toBe(true);
+    expect(await fsp.readFile('/repo/a.txt', 'utf8')).toBe('入库版本\n');
+    expect((await execute('git status', { dir })).output.join('\n')).toContain('干净');
+  });
+
+  it('restore --staged <file>：只撤销暂存，工作区内容保留（笔记的 unstage 场景）', async () => {
+    await execute('git init', { dir });
+    await writeRepoFile('/repo/a.txt', '入库版本\n');
+    await execute('git add .', { dir });
+    await execute('git commit -m "初始提交"', { dir });
+
+    // 新增一个待归档文件并 add（笔记场景：误将测试文件加入暂存区）
+    await writeRepoFile('/repo/test.js', 'console.log(1)\n');
+    await execute('git add test.js', { dir });
+    expect((await execute('git status', { dir })).output.join('\n')).toContain('要提交的变更');
+
+    const result = await execute('git restore --staged test.js', { dir });
+    expect(result.ok).toBe(true);
+
+    // 回到「未追踪」状态 —— 与笔记的输出一致
+    const status = (await execute('git status', { dir })).output.join('\n');
+    expect(status).toContain('未跟踪的文件');
+    expect(status).not.toContain('要提交的变更');
+    // ⚠️ 工作区文件必须还在（这是 --staged 与不带 --staged 的关键差别）
+    expect(await fsp.readFile('/repo/test.js', 'utf8')).toBe('console.log(1)\n');
+  });
+
+  it('checkout -- <file> 旧语法与 restore 等价（笔记的「旧方式」）', async () => {
+    await execute('git init', { dir });
+    await writeRepoFile('/repo/a.txt', '入库版本\n');
+    await execute('git add .', { dir });
+    await execute('git commit -m "初始提交"', { dir });
+    await writeRepoFile('/repo/a.txt', '改乱了\n');
+
+    const result = await execute('git checkout -- a.txt', { dir });
+    expect(result.ok).toBe(true);
+    expect(await fsp.readFile('/repo/a.txt', 'utf8')).toBe('入库版本\n');
+  });
+
+  it('restore 对未追踪文件报错（没有可恢复的来源）', async () => {
+    await execute('git init', { dir });
+    await writeRepoFile('/repo/a.txt', '入库版本\n');
+    await execute('git add .', { dir });
+    await execute('git commit -m "初始提交"', { dir });
+
+    await writeRepoFile('/repo/untracked.txt', '从未入库\n');
+    const result = await execute('git restore untracked.txt', { dir });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('不在暂存区里');
+  });
+});
+
+describe('executor —— M5a 撤销：revert 生成反向提交', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = freshRepo();
+  });
+
+  it('revert <commit>：撤销改动但历史向前延伸（笔记的「安全反转」）', async () => {
+    await execute('git init', { dir });
+    await writeRepoFile('/repo/a.txt', 'v1\n');
+    await execute('git add .', { dir });
+    await execute('git commit -m "第一"', { dir });
+
+    await writeRepoFile('/repo/a.txt', 'v2-有问题\n');
+    await execute('git add .', { dir });
+    await execute('git commit -m "引入问题的改动"', { dir });
+
+    await execute('git add .', { dir });
+    const result = await execute('git revert HEAD', { dir });
+    expect(result.ok).toBe(true);
+    expect(result.output.join('\n')).toContain('Revert "引入问题的改动"');
+
+    // 内容回到 v1
+    expect(await fsp.readFile('/repo/a.txt', 'utf8')).toBe('v1\n');
+    // ⚠️ 历史是**三条**（第一 → 有问题的改动 → 反向提交），而非回退成两条 ——
+    //    这正是 reset 与 revert 的教学分野（笔记「reset vs revert」）。
+    const log = (await execute('git log --oneline', { dir })).output;
+    expect(log).toHaveLength(3);
+    expect(log[0]).toContain('Revert');
+  });
+
+  it('revert 根提交被拒绝（没有可对比的前身）', async () => {
+    await execute('git init', { dir });
+    await writeRepoFile('/repo/a.txt', 'v1\n');
+    await execute('git add .', { dir });
+    await execute('git commit -m "唯一提交"', { dir });
+
+    const result = await execute('git revert HEAD', { dir });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('无法撤销根提交');
+  });
+
+  it('被撤销的改动之后又改过同一文件 → 明确报冲突风险（§14 不伪造）', async () => {
+    await execute('git init', { dir });
+    await writeRepoFile('/repo/a.txt', 'v1\n');
+    await execute('git add .', { dir });
+    await execute('git commit -m "第一"', { dir });
+
+    await writeRepoFile('/repo/a.txt', 'v2\n');
+    await execute('git add .', { dir });
+    await execute('git commit -m "第二"', { dir });
+
+    await writeRepoFile('/repo/a.txt', 'v3\n');
+    await execute('git add .', { dir });
+    await execute('git commit -m "第三"', { dir });
+
+    // 撤销「第二」，但它之后「第三」又改过 a.txt → 真 git 会冲突
+    const result = await execute('git revert HEAD~1', { dir });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('冲突');
+  });
+});
+
+describe('executor —— M5a 撤销：reflog 与恢复剧本（5-6 的引擎依据）', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = freshRepo();
+  });
+
+  it('reflog 输出 <短hash> HEAD@{n}: <action> 格式，且能据此恢复误删的提交', async () => {
+    await execute('git init', { dir });
+    await writeRepoFile('/repo/a.txt', 'v1\n');
+    await execute('git add .', { dir });
+    await execute('git commit -m "第一"', { dir });
+
+    await writeRepoFile('/repo/a.txt', '重要的v2\n');
+    await execute('git add .', { dir });
+    await execute('git commit -m "重要提交"', { dir });
+
+    await writeRepoFile('/repo/a.txt', 'v3\n');
+    await execute('git add .', { dir });
+    await execute('git commit -m "第三"', { dir });
+
+    // 误操作：一口气退掉两个提交
+    await execute('git reset --hard HEAD~2', { dir });
+    expect((await execute('git log --oneline', { dir })).output).toHaveLength(1);
+
+    // 查看 reflog —— 格式必须与笔记逐字一致
+    const reflog = await execute('git reflog', { dir });
+    expect(reflog.ok).toBe(true);
+    const lines = reflog.output;
+    expect(lines.length).toBeGreaterThanOrEqual(4);
+    // 最近一条即那次误操作
+    expect(lines[0]).toMatch(/^[0-9a-f]{7} HEAD@\{0\}: reset: moving to HEAD~2$/);
+    // 更早的记录里能看到 commit
+    expect(lines.join('\n')).toContain('HEAD@{1}: commit');
+    expect(lines.join('\n')).toContain('commit (initial)');
+
+    // 用 reflog 恢复
+    const restored = await execute('git reset --hard HEAD@{1}', { dir });
+    expect(restored.ok).toBe(true);
+
+    const log = (await execute('git log --oneline', { dir })).output;
+    expect(log).toHaveLength(3);
+    expect(log[0]).toContain('第三');
+    expect(await fsp.readFile('/repo/a.txt', 'utf8')).toBe('v3\n');
+  });
+
+  it('reflog 里的 checkout / branch 记录与真 git 的 action 文案一致', async () => {
+    await execute('git init', { dir });
+    await writeRepoFile('/repo/a.txt', 'v1\n');
+    await execute('git add .', { dir });
+    await execute('git commit -m "第一"', { dir });
+    await execute('git branch dev', { dir });
+    await execute('git checkout dev', { dir });
+
+    const lines = (await execute('git reflog', { dir })).output;
+    const text = lines.join('\n');
+    expect(text).toContain('branch: Created from HEAD');
+    expect(text).toContain('checkout: moving from main to dev');
+  });
+
+  it('空仓库的 reflog 给出可读输出而不是报错', async () => {
+    await execute('git init', { dir });
+    // ⚠️ `freshRepo()` 只换了 LightningFS 实例，仓库路径恒为 `/repo` ——
+    // 而 reflog 的内存表按**目录**为键，故需显式清掉上一用例的残留。
+    // （生产环境里这条清理由 `sandbox.reset()` 承担，见 sandbox.ts。）
+    clearReflog({ dir });
+    const result = await execute('git reflog', { dir });
+    expect(result.ok).toBe(true);
+    expect(result.output.join('\n')).toContain('还没有任何 HEAD 移动记录');
+  });
+
+  it('HEAD@{n} 越界时报错并指向 git reflog', async () => {
+    await execute('git init', { dir });
+    await writeRepoFile('/repo/a.txt', 'v1\n');
+    await execute('git add .', { dir });
+    await execute('git commit -m "第一"', { dir });
+
+    const result = await execute('git reset --hard HEAD@{9}', { dir });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('HEAD@{9}');
+  });
+
+  it('undoable 口径：reset/restore/revert 记 true，reflog 与只读命令记 false（§6.2 / §7.3）', async () => {
+    await execute('git init', { dir });
+    await writeRepoFile('/repo/a.txt', 'v1\n');
+    await execute('git add .', { dir });
+    await execute('git commit -m "第一"', { dir });
+    await writeRepoFile('/repo/a.txt', 'v2\n');
+    await execute('git add .', { dir });
+    await execute('git commit -m "第二"', { dir });
+
+    const reflogEntry = await executeToEntry('git reflog', { dir });
+    expect(reflogEntry.undoable).toBe(false);
+
+    const statusEntry = await executeToEntry('git status', { dir });
+    expect(statusEntry.undoable).toBe(false);
+
+    // revert 要在「有前身可撤销」的提交上执行；先测它再测 reset，避免把历史退到只剩根提交
+    const revertEntry = await executeToEntry('git revert HEAD', { dir });
+    expect(revertEntry.ok).toBe(true);
+    expect(revertEntry.undoable).toBe(true);
+
+    // 此时历史是 [反向提交, 第二, 第一]，reset 掉最近一次
+    const hardEntry = await executeToEntry('git reset --hard HEAD~1', { dir });
+    expect(hardEntry.ok).toBe(true);
+    expect(hardEntry.undoable).toBe(true);
+
+    // restore 需要先有可恢复的改动
+    await writeRepoFile('/repo/a.txt', '改乱了\n');
+    const restoreEntry = await executeToEntry('git restore a.txt', { dir });
+    expect(restoreEntry.undoable).toBe(true);
+
+    // checkout 的撤销性取决于是否有路径参数：切分支不属撤销
+    const branchEntry = await executeToEntry('git branch dev', { dir });
+    expect(branchEntry.undoable).toBe(false);
+    const checkoutEntry = await executeToEntry('git checkout dev', { dir });
+    expect(checkoutEntry.undoable).toBe(false);
+
+    // 而 `checkout -- <path>`（丢弃改动）属撤销（§6.2 字面清单）
+    await execute('git checkout main', { dir });
+    await writeRepoFile('/repo/a.txt', '又改乱了\n');
+    const checkoutPathsEntry = await executeToEntry('git checkout -- a.txt', { dir });
+    expect(checkoutPathsEntry.ok).toBe(true);
+    expect(checkoutPathsEntry.undoable).toBe(true);
   });
 });

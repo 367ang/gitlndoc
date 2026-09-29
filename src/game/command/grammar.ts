@@ -4,10 +4,11 @@
  * 职责：把 token 数组解析成 `git <verb> [flags] [args]` 结构，校验参数个数与合法性，
  * 产出**规范化的判别联合参数对象**。本层只做「认不认得」，不碰 git、不执行任何东西。
  *
- * ⚠️ M4 起的白名单：`init` / `add` / `commit` / `status` / `log` / `branch` /
- * `checkout` / `switch` / `merge` / `rebase` / `rm` / `diff`。
- * 其余子命令（reset / revert / stash / tag / remote / clone / push / fetch / pull …）
- * 返回 `kind: 'unsupported'` 的校验结果 ——
+ * ⚠️ M5a 起的白名单：`init` / `add` / `commit` / `status` / `log` / `branch` /
+ * `checkout` / `switch` / `merge` / `rebase` / `rm` / `diff` /
+ * **`reset` / `restore` / `revert` / `reflog`**（第五章「时空回溯」）。
+ * 其余子命令（tag / remote / clone / push / fetch / pull / stash …）返回
+ * `kind: 'unsupported'` 的校验结果 ——
  * 依据 §14「grammar 层做子集白名单，超出范围给『该版本不支持』提示而非假装执行」，
  * 绝不落到执行层。
  *
@@ -15,7 +16,7 @@
  * 与 `engine/errors.ts::GitUnsupportedError` 的文案保持一致，见 `unsupportedMessage()`。
  */
 
-/** M4 支持解析的 verb 白名单 */
+/** M5a 支持解析的 verb 白名单 */
 export const SUPPORTED_VERBS = [
   'init',
   'add',
@@ -29,7 +30,13 @@ export const SUPPORTED_VERBS = [
   'rebase',
   'rm',
   'diff',
+  // M5a：第五章「时空回溯」
+  'reset',
+  'restore',
+  'revert',
+  'reflog',
 ] as const;
+
 
 /** M1 支持的子命令名 */
 export type SupportedVerb = (typeof SUPPORTED_VERBS)[number];
@@ -51,14 +58,17 @@ export interface AddCommand {
 }
 
 /** `git commit` 的规范化参数 */
+/** `git commit -m <message> [-a] [--amend] [--no-edit]` */
 export interface CommitCommand {
   verb: 'commit';
-  /** `-m <msg>` 提供的提交信息；未提供则为 undefined */
+  /** `-m <msg>` 提供的提交信息；`--amend --no-edit` 时为 undefined（沿用原信息） */
   message?: string;
   /** `-a` / `--all`：提交前自动暂存已跟踪文件的改动 */
   all: boolean;
-  /** `--amend`：修补最近一次提交（M1 未实现，由 executor 回「不支持」） */
+  /** `--amend`：修补最近一次提交（M5a 起由 executor 真正实现） */
   amend: boolean;
+  /** `--no-edit`：与 `--amend` 配合，沿用原提交信息（M5a） */
+  noEdit?: boolean;
 }
 
 /** `git status` 的规范化参数 */
@@ -91,10 +101,15 @@ export interface BranchCommand {
 /** `git checkout <branch>` / `git switch <branch>` 的规范化参数（M4） */
 export interface CheckoutCommand {
   verb: 'checkout' | 'switch';
-  /** 目标分支名 */
+  /** 目标分支名；`checkout -- <path>` 路径模式下为空串 */
   branch: string;
   /** `-b <name>`（checkout）/ `-c <name>`（switch）：创建并切换 */
   create: boolean;
+  /**
+   * `git checkout -- <pathspec>...`（M5a）：丢弃工作区改动，等价于 `git restore`。
+   * 非路径模式下为 undefined。
+   */
+  paths?: string[];
 }
 
 /** `git merge <branch>` 的规范化参数（M4） */
@@ -127,6 +142,36 @@ export interface DiffCommand {
   staged: boolean;
 }
 
+/** `git reset [--soft|--mixed|--hard] <target>` 的规范化参数（M5a） */
+export interface ResetCommand {
+  verb: 'reset';
+  /** 三模式；缺省为 `'mixed'`（与真 git 一致） */
+  mode: 'soft' | 'mixed' | 'hard';
+  /** 目标 ref 表达式（`HEAD~1` / `HEAD@{0}` / 分支名 / 提交 hash） */
+  target: string;
+}
+
+/** `git restore [--staged] <pathspec>...` 的规范化参数（M5a） */
+export interface RestoreCommand {
+  verb: 'restore';
+  /** `--staged`：只把索引回退到 HEAD，工作区保持不动 */
+  staged: boolean;
+  /** 要恢复的路径 */
+  paths: string[];
+}
+
+/** `git revert <commit>` 的规范化参数（M5a） */
+export interface RevertCommand {
+  verb: 'revert';
+  /** 要撤销的提交（ref 表达式） */
+  target: string;
+}
+
+/** `git reflog` 的规范化参数（M5a）—— 无参数 */
+export interface ReflogCommand {
+  verb: 'reflog';
+}
+
 /** 命令参数的判别联合 */
 export type ParsedCommand =
   | InitCommand
@@ -139,7 +184,12 @@ export type ParsedCommand =
   | MergeCommand
   | RebaseCommand
   | RmCommand
-  | DiffCommand;
+  | DiffCommand
+  | ResetCommand
+  | RestoreCommand
+  | RevertCommand
+  | ReflogCommand;
+
 
 /** 校验失败的类别，供 UI 决定呈现方式（提示 / 报错 / 警告） */
 export type GrammarErrorKind =
@@ -228,6 +278,14 @@ export function parse(tokens: string[]): GrammarResult {
       return parseRm(rest);
     case 'diff':
       return parseDiff(rest);
+    case 'reset':
+      return parseReset(rest);
+    case 'restore':
+      return parseRestore(rest);
+    case 'revert':
+      return parseRevert(rest);
+    case 'reflog':
+      return parseReflog(rest);
     default:
       // SUPPORTED_VERBS 已在上方过滤，此处不可达；保留以满足穷尽性检查
       return fail('unsupported', unsupportedMessage(verb));
@@ -281,6 +339,8 @@ function parseCommit(args: string[]): GrammarResult {
   let message: string | undefined;
   let all = false;
   let amend = false;
+  /** `--no-edit`（M5a）：与 `--amend` 配合，沿用原提交信息 */
+  let noEdit = false;
   const positional: string[] = [];
 
   for (let i = 0; i < args.length; i += 1) {
@@ -313,6 +373,12 @@ function parseCommit(args: string[]): GrammarResult {
       amend = true;
       continue;
     }
+    // `--no-edit`（M5a）：修补时沿用原提交信息 —— 笔记 git-undo.md 的
+    // 「添加遗漏的文件到最后一次提交：git add forgotten-file.js && git commit --amend --no-edit」
+    if (arg === '--no-edit') {
+      noEdit = true;
+      continue;
+    }
     if (arg === '-am' || arg === '-ma') {
       // `-am "msg"`：合并旗标，等价于 `-a -m "msg"`
       const value = args[i + 1];
@@ -331,6 +397,10 @@ function parseCommit(args: string[]): GrammarResult {
   }
 
   if (message === undefined) {
+    // `--amend --no-edit`：沿用原提交信息，此时不需要 -m（M5a，笔记 5-1 的第二个场景）
+    if (amend && noEdit) {
+      return { ok: true, command: { verb: 'commit', message: undefined, all, amend, noEdit } };
+    }
     // 与真 git 一致：无 -m 且无编辑器时，不允许消息为空
     if (positional.length > 0) {
       return fail('invalid-usage', '请使用 -m 提供提交信息，例如：git commit -m "初始提交"');
@@ -340,8 +410,11 @@ function parseCommit(args: string[]): GrammarResult {
   if (message.trim().length === 0) {
     return fail('invalid-usage', '提交信息不能为空。');
   }
+  if (noEdit && !amend) {
+    return fail('invalid-usage', '--no-edit 只能与 --amend 一起使用。');
+  }
 
-  return { ok: true, command: { verb: 'commit', message, all, amend } };
+  return { ok: true, command: { verb: 'commit', message, all, amend, noEdit } };
 }
 
 /** `git status [-s|--short]` */
@@ -444,9 +517,23 @@ function parseCheckout(verb: 'checkout' | 'switch', args: string[]): GrammarResu
   const createFlag = verb === 'checkout' ? '-b' : '-c';
   let create = false;
   const positional: string[] = [];
+  /** `--` 之后的路径 —— 即 `git checkout -- <pathspec>` 旧语法（M5a 支持，服务 5-3） */
+  const pathsAfterDashDash: string[] = [];
+  let afterDashDash = false;
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
+
+    // `--` 分隔符：其后的一切都是路径（真 git 的路径消歧义写法）
+    if (arg === '--') {
+      afterDashDash = true;
+      continue;
+    }
+    if (afterDashDash) {
+      pathsAfterDashDash.push(arg);
+      continue;
+    }
+
     if (arg === createFlag) {
       const value = args[i + 1];
       if (value === undefined) {
@@ -466,6 +553,19 @@ function parseCheckout(verb: 'checkout' | 'switch', args: string[]): GrammarResu
     positional.push(arg);
   }
 
+  // `git checkout -- <path>` / `git checkout <path>`（丢弃工作区改动，M5a）
+  // ⚠️ `checkout --` 与 `restore` 同语义，笔记 git-undo.md 明确保留了这种旧写法。
+  // 仅 `checkout` 支持（`switch` 没有路径模式）。
+  if (pathsAfterDashDash.length > 0) {
+    if (verb !== 'checkout') {
+      return fail('invalid-usage', 'git switch 不支持路径参数 —— 丢弃工作区改动请用 git restore。');
+    }
+    if (positional.length > 0) {
+      return fail('invalid-usage', 'git checkout 不能同时指定分支与路径。');
+    }
+    return { ok: true, command: { verb: 'checkout', branch: '', create: false, paths: pathsAfterDashDash } };
+  }
+
   if (positional.length !== 1) {
     return fail('invalid-usage', `git ${verb} 需要恰好一个分支名，例如：git ${verb} main`);
   }
@@ -475,6 +575,7 @@ function parseCheckout(verb: 'checkout' | 'switch', args: string[]): GrammarResu
   }
   return { ok: true, command: { verb, branch, create } };
 }
+
 
 /** `git merge <branch>`（M4） */
 function parseMerge(args: string[]): GrammarResult {
@@ -544,3 +645,120 @@ function parseDiff(args: string[]): GrammarResult {
   }
   return { ok: true, command: { verb: 'diff', staged } };
 }
+
+// ── M5a：第五章「时空回溯」的四个命令 ──────────────────────────────────────
+
+/**
+ * ref 表达式的最小合法性：非空、无空白、不以 `-` 开头、不含 `..`。
+ *
+ * ⚠️ 这里**不深究** `~n` / `^n` / `@{n}` 的结构是否合法 —— 那是
+ * `engine/refExpr.ts::parseRefExpr` 的职责，它在执行层给出精确的中文报错。
+ * 语法层只拦明显非法的形态，避免把「解析细节」复制成两份而漂移。
+ */
+function isPlausibleRef(text: string): boolean {
+  return text.length > 0 && !text.startsWith('-') && !/\s/.test(text) && !text.includes('..');
+}
+
+const REF_HINT = '可以写成分支名、提交 hash，或 HEAD~1 / HEAD@{0} 这样的引用表达式。';
+
+/**
+ * `git reset [--soft|--mixed|--hard] <target>`（M5a，服务 5-2 / 5-5 / 5-6）。
+ *
+ * 对齐真 git：缺省模式为 `--mixed`；目标必填（真 git 的 `git reset` 无参数是
+ * 「重置索引」的另一种用法，本版本不纳入，明确提示）。
+ */
+function parseReset(args: string[]): GrammarResult {
+  let mode: 'soft' | 'mixed' | 'hard' = 'mixed';
+  let modeSeen = false;
+  const positional: string[] = [];
+
+  for (const arg of args) {
+    if (arg === '--soft' || arg === '--mixed' || arg === '--hard') {
+      if (modeSeen) {
+        return fail('invalid-usage', 'git reset 一次只能指定一种模式（--soft / --mixed / --hard）。');
+      }
+      mode = arg.slice(2) as 'soft' | 'mixed' | 'hard';
+      modeSeen = true;
+      continue;
+    }
+    if (isFlag(arg)) {
+      return fail('invalid-usage', `git reset 暂不支持选项 ${arg}（本版本仅支持 --soft / --mixed / --hard）。`);
+    }
+    positional.push(arg);
+  }
+
+  if (positional.length === 0) {
+    return fail(
+      'invalid-usage',
+      `请指定要回退到的目标，例如：git reset --soft HEAD~1。${REF_HINT}`,
+    );
+  }
+  if (positional.length > 1) {
+    return fail('invalid-usage', 'git reset 一次只能回退到一个目标。');
+  }
+  const [target] = positional;
+  if (!isPlausibleRef(target)) {
+    return fail('invalid-usage', `「${target}」不是有效的目标。${REF_HINT}`);
+  }
+  return { ok: true, command: { verb: 'reset', mode, target } };
+}
+
+/**
+ * `git restore [--staged] <pathspec>...`（M5a，服务 5-2 / 5-3）。
+ *
+ * 笔记 `docs/notes/git-undo.md` 的两种用法都由本命令承载：
+ *   - `git restore <file>`：丢弃工作区改动；
+ *   - `git restore --staged <file>`：撤销暂存（旧写法 `git reset HEAD <file>`）。
+ */
+function parseRestore(args: string[]): GrammarResult {
+  let staged = false;
+  const paths: string[] = [];
+
+  for (const arg of args) {
+    if (arg === '--staged' || arg === '--cached') {
+      staged = true;
+      continue;
+    }
+    if (isFlag(arg)) {
+      return fail('invalid-usage', `git restore 暂不支持选项 ${arg}（本版本仅支持 --staged）。`);
+    }
+    paths.push(arg);
+  }
+
+  if (paths.length === 0) {
+    return fail('invalid-usage', '请指定要恢复的文件路径，例如：git restore notes/draft.md');
+  }
+  return { ok: true, command: { verb: 'restore', staged, paths } };
+}
+
+/** `git revert <commit>`（M5a，服务 5-4 / 5-5） */
+function parseRevert(args: string[]): GrammarResult {
+  const positional: string[] = [];
+  for (const arg of args) {
+    if (isFlag(arg)) {
+      return fail('invalid-usage', `git revert 暂不支持选项 ${arg}（如 -m / --no-commit）。`);
+    }
+    positional.push(arg);
+  }
+
+  if (positional.length === 0) {
+    return fail('invalid-usage', `请指定要撤销的提交，例如：git revert HEAD~1。${REF_HINT}`);
+  }
+  if (positional.length > 1) {
+    return fail('invalid-usage', 'git revert 一次只能撤销一个提交。');
+  }
+  const [target] = positional;
+  if (!isPlausibleRef(target)) {
+    return fail('invalid-usage', `「${target}」不是有效的提交。${REF_HINT}`);
+  }
+  return { ok: true, command: { verb: 'revert', target } };
+}
+
+/** `git reflog`（M5a，服务 5-6）—— 本版本仅支持无参数调用（`show` 子命令属进阶） */
+function parseReflog(args: string[]): GrammarResult {
+  if (args.length > 0) {
+    return fail('invalid-usage', `git reflog 暂不支持参数 ${args[0]}（本版本仅支持无参数查看全部记录）。`);
+  }
+  return { ok: true, command: { verb: 'reflog' } };
+}
+

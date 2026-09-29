@@ -1,9 +1,18 @@
 // 进度 / 得分 / 成就（development-refinement.md §2 分层职责）。
 //
-// M1 只建立**内存态骨架**：不接持久化（persistence 排在 M5，
-// 见 docs/milestones/M1-tasks.md「已确认的决策」第 3 条）。本文件不含任何 localStorage 代码。
+// ⚠️ M5a 起**已接持久化**（§10）：每次写入都落 localStorage，启动时经
+// `hydrate()` 从 localStorage 读回。M1~M4 的内存态骨架已完成使命。
+//
+// 分层纪律：store 只负责「容纳状态 + 调用 persistence 的读写函数」，
+// 不自己拼 JSON、不碰 localStorage 细节（那在 `src/persistence/progress.ts`）。
 
 import { create } from 'zustand'
+import {
+  loadAchievements,
+  loadProgress,
+  saveAchievements,
+  saveProgress,
+} from '../persistence/progress'
 
 /** 单关记录：得分 / 星级 / 是否通关（§7.4 星级为 0~3 星） */
 export interface LevelRecord {
@@ -24,8 +33,19 @@ export interface ProgressState {
   unlockAchievement: (id: string) => void
   /** 是否已解锁某成就 */
   hasAchievement: (id: string) => boolean
+  /**
+   * 从持久化存储加载进度与成就（M5a）。
+   *
+   * ⚠️ **必须在 boot 阶段、渲染之前调用一次**（见 `main.tsx`）。不调用的话
+   * store 会以空进度启动，玩家刷新浏览器后进度「看起来丢了」—— 直到下一次
+   * 写操作把它覆盖成空。
+   */
+  hydrate: () => void
+  /** 清空进度与成就（含持久化数据）；「重置进度」与测试收尾用 */
+  resetProgress: () => void
 }
 
+/** 空成就列表的**稳定引用**：避免每次 set 都造新数组，减少无谓的重渲染 */
 const EMPTY_ACHIEVEMENTS: string[] = []
 
 export const useProgressStore = create<ProgressState>()((set, get) => ({
@@ -33,23 +53,38 @@ export const useProgressStore = create<ProgressState>()((set, get) => ({
   achievements: EMPTY_ACHIEVEMENTS,
 
   setLevelRecord: (levelId, record) =>
-    set((state) => ({
-      levelRecords: { ...state.levelRecords, [levelId]: record },
-    })),
+    set((state) => {
+      const levelRecords = { ...state.levelRecords, [levelId]: record }
+      // 落盘：失败（隐私模式 / 配额）不影响本次会话继续玩
+      saveProgress(levelRecords)
+      return { levelRecords }
+    }),
 
   unlockAchievement: (id) => {
     if (get().achievements.includes(id)) return
-    set((state) => ({ achievements: [...state.achievements, id] }))
+    set((state) => {
+      const achievements = [...state.achievements, id]
+      saveAchievements(achievements)
+      return { achievements }
+    })
   },
 
   hasAchievement: (id) => get().achievements.includes(id),
+
+  hydrate: () => {
+    set({ levelRecords: loadProgress(), achievements: loadAchievements() })
+  },
+
+  resetProgress: () => {
+    saveProgress({})
+    saveAchievements([])
+    set({ levelRecords: {}, achievements: EMPTY_ACHIEVEMENTS })
+  },
 }))
 
-// TODO(M5, §10 持久化设计)：接入 localStorage，键约定为
-//   - 进度（每关得分/星级/是否通关）→ `gtp:progress:v1`
-//   - 成就                            → `gtp:achievements:v1`
-//   - 设置（提示开关等）              → `gtp:settings:v1`
-// 关卡内崩溃/刷新恢复所需的仓库快照另存 IndexedDB（`gtp:snapshot:<levelId>`），
-// 由 src/persistence/ 负责，M1 不创建该目录。
-// TODO(M3)：成就判定本身（何时调用 unlockAchievement）属 game/scoring/achievement.ts，
-// 不放在 store 层。
+// ⚠️ M5a 已清偿 M1 的 TODO：进度/成就接入 localStorage（键见 persistence/progress.ts）。
+// 仍未落地的：`gtp:settings:v1` 有读写函数但尚无 UI 消费方（属 M7 打磨）；
+// 仓库快照见 `src/persistence/snapshot.ts`（走 LightningFS 自身的 IndexedDB 持久化）。
+//
+// ⚠️ M3 遗留 2 的口径复核已完成：`startLevel` 的 `firstAttempt` 判定读的是
+// **持久化后的**进度，故「重启浏览器后重玩某关」不再被误判为首次尝试。

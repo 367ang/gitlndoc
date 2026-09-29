@@ -1049,9 +1049,10 @@ describe('components —— M4 半拼骨架预填与章节解锁', () => {
   it('MenuScreen 未解锁章节显示 🔒 且按钮禁用（通关上一章全部关卡后解锁）', () => {
     useProgressStore.setState({ levelRecords: {}, achievements: [] })
     render(<MenuScreen />)
-    // ch1 恒解锁、ch2/ch3 未解锁（无通关记录）
-    // ch2 与 ch3 都未解锁 → 文案出现 2 次
-    expect(screen.getAllByText(/🔒 完成上一章全部关卡后解锁/)).toHaveLength(2)
+    // ch1 恒解锁；ch2/ch3/ch5 因前置章未通关而锁
+    // ⚠️ M5a 起 ch5 已注册且 playable —— 它同样处于「未解锁」态，故文案出现 **3** 次
+    //    （原为 2 次；ch4/ch6 尚未 playable，不渲染锁定文案）。
+    expect(screen.getAllByText(/🔒 完成上一章全部关卡后解锁/)).toHaveLength(3)
     // ch2 的开始按钮被禁用
     const ch2Start = screen.getByLabelText('直接开始 ch2-1 状态感知')
     expect(ch2Start).toBeDisabled()

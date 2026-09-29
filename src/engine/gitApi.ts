@@ -19,6 +19,13 @@ import git from 'isomorphic-git';
 import type { FsClient } from 'isomorphic-git';
 import { fsp, getFs, REPO_DIR } from './fs';
 import { GitCommandError, GitResult, GitUnsupportedError, runGit } from './errors';
+import { looksLikeHash, parseRefExpr } from './refExpr';
+import {
+  formatReflog,
+  recordInitialCommit,
+  recordRefMove,
+  resolveReflogEntry,
+} from './reflog';
 
 // --- 固定学习者身份 ---------------------------------------------------------
 
@@ -341,6 +348,14 @@ export interface CommitResult {
   branch: string;
   /** 是否为合并提交（MERGE_HEAD 机制，见 commit() 注释） */
   merge: boolean;
+  /** 是否为 `--amend` 修补（M5a）：被替换掉的旧提交 hash，非 amend 时为 undefined */
+  amendedFrom?: string;
+}
+
+/** `commit()` 的可选行为（M5a） */
+export interface CommitOptions extends RepoOptions {
+  /** `--amend`：修补最近一次提交（替换它，而不是在其上追加） */
+  amend?: boolean;
 }
 
 /** MERGE_HEAD 引用名：存在即表示「一次合并进行中，待完成提交」 */
@@ -376,6 +391,17 @@ async function readMergeHead(base: ReturnType<typeof fsArgs>): Promise<string | 
  *     isomorphic-git 的单亲默认），提交后删除 MERGE_HEAD（对齐真 git 的「完成合并」）；
  *   - 空提交防御照常生效：解决冲突后索引与 HEAD 必有差异，不受双亲影响。
  *
+ * ── `--amend` 修补（M5a，服务 5-1「修正笔误」）───────────────────────────
+ *
+ * 底层用 isomorphic-git 的 `git.commit({ amend: true })`（探针实测可用）：
+ * 新提交的 **parent 仍是原提交的父**，旧提交成为孤儿、`git log` 不再列出 —— 与真 git 一致。
+ *
+ * ⚠️ **空修补防御**（探针实测的真 git 差异，必须补）：
+ * 真 git 在「索引树与父提交树相同」时拒绝 amend（`You have nothing to amend`），
+ * 而 isomorphic-git **照样产出新提交**。若不拦，5-1 可以「什么都不改直接
+ * `git commit --amend`」蒙过去，教学点（先把漏掉的文件补进暂存区再修补）形同虚设。
+ * 判据复用上面那道空提交防御的同一份 `status()` 推导，不重复实现。
+ *
  * @example
  * ```ts
  * const result = await gitApi.commit('初始提交');
@@ -384,10 +410,11 @@ async function readMergeHead(base: ReturnType<typeof fsArgs>): Promise<string | 
  */
 export async function commit(
   message: string,
-  options: RepoOptions = {},
+  options: CommitOptions = {},
 ): Promise<GitResult<CommitResult>> {
   const text = message.trim();
-  const command = `git commit -m "${text}"`;
+  const amend = options.amend === true;
+  const command = amend ? `git commit --amend -m "${text}"` : `git commit -m "${text}"`;
 
   // --- 空提交防御（M3 修复 M2 §5.1 的保真缺陷） --------------------------------
   // 真 git 在「暂存区与 HEAD 完全一致」时拒绝提交（exit 1 "nothing to commit"）。
@@ -399,62 +426,136 @@ export async function commit(
   //   - 有 staged 条目（索引相对 HEAD 有变化，或初生仓库有新暂存）→ 可提交；
   //   - 初生仓库（无 HEAD）：unborn 为 true，只要有 staged 条目即可提交；
   //     索引也为空则真 git 会报「nothing to commit (unborn branch)」，同样拒绝。
+  //
+  // ⚠️ amend 的语义略有不同：真 git 允许「只改提交信息、内容不变」的 amend
+  // （笔记 5-1 的第二个场景就是改错别字）。因此 amend 路径下「无 staged 改动」
+  // 只在**提交信息也与原提交相同**时才拒绝 —— 那才是真 git 的 nothing to amend。
   const statusResult = await status(options);
-  if (statusResult.ok && statusResult.value.staged.length === 0) {
-    const unborn = statusResult.value.unborn;
-    return {
-      ok: false,
-      error: new GitCommandError(
-        'NoCommitError',
-        unborn
-          ? '空仓库里没有可提交的内容 —— 先用 git add 把改动送入暂存区。'
-          : '没有可提交的内容（暂存区与最近一次快照一致）—— 先用 git add 暂存新的改动。',
-        'nothing to commit, working tree clean',
-        {
-          command,
-          hint: '先用 git add <文件>（或 git add .）把要归档的内容送入暂存区，再提交。',
-        },
-      ),
-    };
-  }
   if (!statusResult.ok) {
     // status 本身失败（如仓库未 init）：按原样向调用方报错，不伪装成「可提交」
     return { ok: false, error: statusResult.error };
+  }
+  if (statusResult.value.staged.length === 0) {
+    const unborn = statusResult.value.unborn;
+    const originalMessage = amend ? await headCommitMessage(options) : null;
+    const messageUnchanged = amend && originalMessage !== null && originalMessage === text;
+
+    if (!amend || messageUnchanged) {
+      return {
+        ok: false,
+        error: new GitCommandError(
+          'NoCommitError',
+          amend
+            ? '没有可修补的内容（暂存区与最近一次快照一致，提交信息也没有变化）。'
+            : unborn
+              ? '空仓库里没有可提交的内容 —— 先用 git add 把改动送入暂存区。'
+              : '没有可提交的内容（暂存区与最近一次快照一致）—— 先用 git add 暂存新的改动。',
+          amend ? 'nothing to amend' : 'nothing to commit, working tree clean',
+          {
+            command,
+            hint: amend
+              ? '先把要补进这次快照的文件 git add 进来，或改写提交信息，再执行 --amend。'
+              : '先用 git add <文件>（或 git add .）把要归档的内容送入暂存区，再提交。',
+          },
+        ),
+      };
+    }
   }
 
   const base = fsArgs(options);
   const mergeHead = await readMergeHead(base);
 
   return runGit(command, async () => {
+    const previous = await unbornSafeHead(base);
+
     // 合并进行中：双亲 = [HEAD, MERGE_HEAD]，提交后移除 MERGE_HEAD（真 git 的完成合并语义）。
     // 注意绕过空提交防御的值路径：`git.commit` 不接受 parent 参数，故此处直接用底层 `_commit`
     // 的公开对应 `git.commit({ parent })`——它接受显式 parent 列表，跳过 resolveRef 的单亲推导。
-    const hash = mergeHead
+    // ⚠️ amend 与 MERGE_HEAD 不该同时出现（真 git 会拒绝「合并中 amend」）；
+    // 这里以 amend 优先并继续走双亲逻辑会产生难以解释的结果，故显式拒绝。
+    if (amend && mergeHead !== null) {
+      throw new GitCommandError(
+        'MergeNotSupportedError',
+        '合并进行中不能使用 --amend —— 请先用 git commit 完成这次合并。',
+        `--amend during merge is not supported`,
+        { command },
+      );
+    }
+
+    const hash = amend
       ? await git.commit({
           ...base,
           message: text,
           author: { ...LEARNER_IDENTITY },
           committer: { ...LEARNER_IDENTITY },
-          parent: [
-            (await git.resolveRef({ ...base, ref: 'HEAD' })) as string,
-            mergeHead,
-          ],
+          amend: true,
         })
-      : await git.commit({
-          ...base,
-          message: text,
-          author: { ...LEARNER_IDENTITY },
-          committer: { ...LEARNER_IDENTITY },
-        });
+      : mergeHead
+        ? await git.commit({
+            ...base,
+            message: text,
+            author: { ...LEARNER_IDENTITY },
+            committer: { ...LEARNER_IDENTITY },
+            parent: [previous as string, mergeHead],
+          })
+        : await git.commit({
+            ...base,
+            message: text,
+            author: { ...LEARNER_IDENTITY },
+            committer: { ...LEARNER_IDENTITY },
+          });
 
     if (mergeHead) {
       await git.deleteRef({ ...base, ref: MERGE_HEAD_REF });
     }
 
+    // --- reflog（M5a）--------------------------------------------------------
+    // 记在 ref 写入出口，供 `git reflog` 与 `HEAD@{n}` 使用。
+    // amend 在真 git 的 reflog 里同样记为一条 commit (amend) 记录。
+    if (amend) {
+      recordRefMove(options, {
+        from: previous ?? NULL_OID_PLACEHOLDER,
+        to: hash,
+        action: 'commit (amend)',
+      });
+    } else if (previous === null) {
+      recordInitialCommit(options, hash);
+    } else {
+      recordRefMove(options, { from: previous, to: hash, action: 'commit' });
+    }
+
     const branch = (await git.currentBranch({ ...base, fullname: false })) ?? DEFAULT_BRANCH;
-    return { hash, branch, merge: mergeHead !== null };
+    const result: CommitResult = { hash, branch, merge: mergeHead !== null };
+    if (amend && previous !== null) result.amendedFrom = previous;
+    return result;
   });
 }
+
+/** 全 0 oid：真 git 用它表示「此前没有提交」 */
+const NULL_OID_PLACEHOLDER = '0'.repeat(40);
+
+/** 取 HEAD 指向的提交 oid；无提交（初生仓库）时返回 null */
+async function unbornSafeHead(base: ReturnType<typeof fsArgs>): Promise<string | null> {
+  try {
+    return await git.resolveRef({ ...base, ref: 'HEAD' });
+  } catch {
+    return null;
+  }
+}
+
+/** 取 HEAD 提交的信息（trim 后）；无提交时返回 null。amend 的空修补判据用 */
+async function headCommitMessage(options: RepoOptions): Promise<string | null> {
+  const base = fsArgs(options);
+  const head = await unbornSafeHead(base);
+  if (head === null) return null;
+  try {
+    const { commit: headCommit } = await git.readCommit({ ...base, oid: head });
+    return headCommit.message.trim();
+  } catch {
+    return null;
+  }
+}
+
 
 /**
  * `git status` —— 返回工作区条目列表。
@@ -939,6 +1040,15 @@ export async function branch(
   return runGit(`git branch ${name}`, async () => {
     const from = options.startPoint ?? (await git.resolveRef({ ...base, ref: 'HEAD' }));
     await git.branch({ ...base, ref: name, object: from });
+
+    // reflog（M5a）：真 git 在创建分支时记 `branch: Created from <起点>`
+    recordRefMove(options, {
+      from,
+      to: from,
+      action: 'branch: Created from',
+      detail: options.startPoint ?? 'HEAD',
+    });
+
     return { name, from: from.slice(0, 7) };
   });
 }
@@ -987,10 +1097,36 @@ export interface CheckoutResult {
 export async function checkout(ref: string, options: RepoOptions = {}): Promise<GitResult<CheckoutResult>> {
   const base = fsArgs(options);
   return runGit(`git checkout ${ref}`, async () => {
+    const previous = await unbornSafeHead(base);
+    const previousBranch = await currentBranchOrNull(base);
     await git.checkout({ ...base, ref });
+    const next = await unbornSafeHead(base);
+
+    // reflog：真 git 记 `checkout: moving from <旧分支> to <新分支>`。
+    // ⚠️ 判据是**分支变了**，而不是提交 oid 变了 —— 真 git 在 `main` 与刚创建的空分支
+    // （两者同头）之间切换时**照样**留下一条 checkout 记录（实测对照）。
+    // 早期实现按 `previous !== next` 判断，会漏掉「同头分支切换」这一最常见的情形。
+    if (previousBranch !== null && previousBranch !== ref && next !== null) {
+      recordRefMove(options, {
+        from: previous ?? next,
+        to: next,
+        action: 'checkout: moving from',
+        detail: `${previousBranch} to ${ref}`,
+      });
+    }
     return { branch: ref };
   });
 }
+
+/** 当前分支名；初生仓库（无 HEAD）时返回 null */
+async function currentBranchOrNull(base: ReturnType<typeof fsArgs>): Promise<string | null> {
+  try {
+    return (await git.currentBranch({ ...base, fullname: false })) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 
 /** `merge()` 的返回值（成功路径） */
 export interface MergeResult {
@@ -1037,6 +1173,9 @@ export async function merge(
   const outcome: GitResult<MergeResult | (MergeConflictResult & { conflicted: true })> = await runGit(
     `git merge ${theirs}`,
     async (): Promise<MergeResult | (MergeConflictResult & { conflicted: true })> => {
+      // reflog 用的「合并前的头」：必须在 git.merge 之前读 —— ff 合并会就地移动 HEAD
+      const mergedFromRef = (await unbornSafeHead(base)) ?? NULL_OID_PLACEHOLDER;
+
       const result = await git.merge({
         ...base,
         theirs,
@@ -1058,6 +1197,16 @@ export async function merge(
       if (result.fastForward || result.mergeCommit) {
         const current = (await git.currentBranch({ ...base, fullname: false })) ?? '';
         await git.checkout({ ...base, ref: current });
+
+        // reflog（M5a）：真 git 的合并同样留下一条记录。ff 与非 ff 都记，
+        // from 取合并前的 HEAD（注意：ff 时 HEAD 已被 isomorphic-git 移动，
+        // 故此处用 result.oid 之外的途径 —— ff 的旧头即合并前的头）。
+        recordRefMove(options, {
+          from: mergedFromRef,
+          to: result.oid as string,
+          action: 'merge',
+          detail: theirs,
+        });
       }
 
       if (result.fastForward) {
@@ -1257,34 +1406,557 @@ export async function rebase(
 
     // 4) 移动当前分支指针并同步工作区
     const branch = (await git.currentBranch({ ...base, fullname: false })) ?? DEFAULT_BRANCH;
+    const headBeforeRebase = await unbornSafeHead(base);
     await git.writeRef({ ...base, ref: `refs/heads/${branch}`, value: newParent, force: true });
     await git.checkout({ ...base, ref: branch });
+
+    // reflog（M5a）：真 git 的 rebase 会留下 (finish) 记录，指向变基后的新头
+    if (headBeforeRebase !== null) {
+      recordRefMove(options, {
+        from: headBeforeRebase,
+        to: newParent,
+        action: 'rebase (finish)',
+        detail: `returning to refs/heads/${branch}`,
+      });
+    }
 
     return { branch, count: toReplay.length };
   });
 }
 
+// ── M5a：撤销（reset / restore / revert / reflog）──────────────────────────
+
+/** `reset()` 的三种模式，对齐真 git（笔记 `git-undo.md`「reset 三种模式」） */
+export type ResetMode = 'soft' | 'mixed' | 'hard';
+
+/** `reset()` 的返回值 */
+export interface ResetResult {
+  /** 当前分支名 */
+  branch: string;
+  /** 重置目标提交的短 hash */
+  target: string;
+  /** 使用的模式 */
+  mode: ResetMode;
+  /** 玩家书写的目标写法（如 `HEAD~1`），供回显对齐真 git 的 `HEAD is now at …` */
+  targetLabel: string;
+}
+
 /**
- * 解析一个引用（分支名或完整 ref）指向的提交 oid。
+ * `git reset [--soft|--mixed|--hard] <target>` —— 把当前分支指针移回目标提交。
+ *
+ * isomorphic-git **没有 reset 命令**（§14 的预案「gitApi 用组合实现兜底」），
+ * 故此处按三模式各自组合底层原语。三态行为已用探针逐一实测
+ * （见 docs/milestones/M5-tasks.md §六 第 10 条），与笔记 `git-undo.md` 的模式对比表**逐格吻合**：
+ *
+ * | 模式 | 工作区 | 索引（暂存区） | 提交历史 | 实现 |
+ * |---|---|---|---|---|
+ * | `--soft` | 保留 | 保留 | 回退 | 只 `writeRef` |
+ * | `--mixed`（缺省） | 保留 | 复位到目标 | 回退 | `writeRef` + 逐文件 `resetIndex` |
+ * | `--hard` | 复位到目标 | 复位到目标 | 回退 | `writeRef` + `checkout({ force: true })` |
+ *
+ * ⚠️ 三条实测约束（违反即出错）：
+ *   1. `git.resetIndex` **必须带 `filepath`** —— 省略抛 `MissingParameterError`，
+ *      故 `--mixed` 需先取索引路径清单再逐个复位；
+ *   2. `--hard` 的工作区同步必须用 `checkout({ force: true })`：不带 force 时
+ *      isomorphic-git 对「工作区有未提交改动」会抛 `CheckoutConflictError`，
+ *      而 `reset --hard` 的真 git 语义恰恰是**丢弃**这些改动；
+ *   3. `--hard` 会丢弃未追踪文件吗？真 git **不会**（只覆写被追踪的路径）。
+ *      isomorphic-git 的 checkout 同样保留未追踪文件（M4 探针 4D 已验证），故一致。
+ *
+ * @param target ref 表达式（`HEAD~1` / `HEAD@{0}` / 分支名 / 提交 hash）
+ * @param options.mode 三模式之一，缺省 `'mixed'`（真 git 的默认）
+ */
+export async function reset(
+  target: string,
+  options: RepoOptions & { mode?: ResetMode } = {},
+): Promise<GitResult<ResetResult>> {
+  const mode: ResetMode = options.mode ?? 'mixed';
+  const base = fsArgs(options);
+  const command = `git reset ${mode === 'mixed' ? '' : `--${mode} `}${target}`.trim();
+
+  return runGit(command, async () => {
+    const branch = (await git.currentBranch({ ...base, fullname: false })) ?? DEFAULT_BRANCH;
+    const targetOid = await resolveRefInternal(base, options, target);
+    const previous = await unbornSafeHead(base);
+
+    // 1) 移动分支指针（三模式共同的第一步）
+    await git.writeRef({ ...base, ref: `refs/heads/${branch}`, value: targetOid, force: true });
+
+    // 2) `--hard`：工作区与索引一起复位到目标提交
+    if (mode === 'hard') {
+      await git.checkout({ ...base, ref: branch, force: true });
+    }
+
+    // 3) `--mixed`：索引复位到目标提交，工作区原样保留
+    if (mode === 'mixed') {
+      const indexOids = await readIndexOids(base);
+      for (const path of indexOids.keys()) {
+        // ⚠️ resetIndex 必须带 filepath（探针实测：省略抛 MissingParameterError）。
+        // 目标 ref 传目标提交 oid：即以「目标提交的树」为基准复位该路径。
+        await git.resetIndex({ ...base, filepath: path, ref: targetOid });
+      }
+    }
+
+    // 4) reflog：对齐真 git 的 `reset: moving to <写法>`
+    recordRefMove(options, {
+      from: previous ?? NULL_OID_PLACEHOLDER,
+      to: targetOid,
+      action: 'reset: moving to',
+      detail: target,
+    });
+
+    return { branch, target: targetOid.slice(0, 7), mode, targetLabel: target };
+  });
+}
+
+/** `restore()` 的返回值 */
+export interface RestoreResult {
+  /** 被恢复的仓库相对路径（按输入顺序，去重后） */
+  paths: string[];
+  /** 是否只复位了索引（`--staged`） */
+  staged: boolean;
+}
+
+/**
+ * `git restore [--staged] <pathspec>...` —— 丢弃工作区改动或撤销暂存（M5a，服务 5-2 / 5-3）。
+ *
+ * 真 git 的两种用法（笔记 `git-undo.md`）：
+ *   - `git restore <file>`：**工作区**回退到索引中的版本（丢弃未暂存的编辑）；
+ *   - `git restore --staged <file>`：**索引**回退到 HEAD 版本，工作区文件保持不动
+ *     （即「撤销 add」，等价于旧写法 `git reset HEAD <file>`）。
+ *
+ * 实现：两者都走 `git.checkout({ filepaths })` —— isomorphic-git 的 checkout 支持
+ * 只检出指定路径。差异在参考点：
+ *   - 非 staged：以**索引**为准 —— 直接从索引取 blob 写回工作区；
+ *   - staged：以 **HEAD** 为准 —— `checkout({ ref: 'HEAD', filepaths })` 会把
+ *     HEAD 的版本同时写回索引与工作区。⚠️ 这会**顺带丢弃工作区的未暂存改动**，
+ *     与真 git 的 `restore --staged` 语义不符（真 git 只动索引）。
+ *     故这里改为「先把工作区内容存下来 → checkout 到 HEAD → 再把工作区内容写回」，
+ *     精确复刻「只动索引」。
+ *
+ * @param paths 仓库相对路径列表
+ * @param options.staged 是否只复位索引
+ */
+export async function restore(
+  paths: string[],
+  options: RepoOptions & { staged?: boolean } = {},
+): Promise<GitResult<RestoreResult>> {
+  const list = paths.map((path) => path.trim()).filter((path) => path.length > 0);
+  const staged = options.staged === true;
+  const command = `git restore ${staged ? '--staged ' : ''}${list.join(' ')}`.trim();
+
+  if (list.length === 0) {
+    return {
+      ok: false,
+      error: new GitCommandError('InvalidFilepathError', '请指定要恢复的文件路径。', 'No filepath provided.', {
+        command: 'git restore',
+        hint: '例如：git restore notes/draft.md',
+      }),
+    };
+  }
+
+  return runGit(command, async () => {
+    const dir = resolveDir(options);
+    const base = fsArgs(options);
+    const relativePaths = list.map((path) => normalizeRepoPath(dir, path));
+
+    if (!staged) {
+      // 工作区 ← 索引：从索引取版本写回工作区。
+      // 索引中不存在该路径时，真 git 报 `pathspec ... did not match`。
+      const indexOids = await readIndexOids(base);
+      for (const path of relativePaths) {
+        const oid = indexOids.get(path);
+        if (oid === undefined) {
+          throw new GitCommandError(
+            'NotFoundError',
+            `${path} 不在暂存区里 —— 没有可用来恢复工作区的版本。`,
+            `pathspec '${path}' did not match any file(s) known to git`,
+            {
+              command,
+              hint: 'git restore 只能把工作区恢复到「已入库的版本」；未追踪的新文件没有可恢复的来源。',
+            },
+          );
+        }
+        const { blob } = await git.readBlob({ ...base, oid });
+        await fsp.writeFile(`${dir}/${path}`, blob);
+      }
+      return { paths: relativePaths, staged: false };
+    }
+
+    // --staged：HEAD → 索引，**工作区保持不动**（真 git 语义）。
+    // 先把工作区现状读出来，checkout 后再写回 —— 否则 checkout 会连工作区一起改。
+    const preserved = new Map<string, Uint8Array | null>();
+    for (const path of relativePaths) {
+      try {
+        preserved.set(path, await fsp.readFile(`${dir}/${path}`));
+      } catch {
+        preserved.set(path, null); // 工作区里本来就没有（如 add 后又删了）
+      }
+    }
+
+    await git.checkout({ ...base, ref: 'HEAD', filepaths: relativePaths });
+
+    for (const [path, content] of preserved) {
+      const absolute = `${dir}/${path}`;
+      if (content === null) {
+        // 原本不在工作区：保持「不在」——checkout 可能把它写回来了，需删掉
+        try {
+          await fsp.unlink(absolute);
+        } catch {
+          // 文件确实不存在，无需处理
+        }
+        continue;
+      }
+      await fsp.writeFile(absolute, content);
+    }
+
+    return { paths: relativePaths, staged: true };
+  });
+}
+
+/** `checkout -- <pathspec>` 旧语法的返回值（与 `restore` 同语义） */
+export async function checkoutPaths(
+  paths: string[],
+  options: RepoOptions = {},
+): Promise<GitResult<RestoreResult>> {
+  const result = await restore(paths, options);
+  if (!result.ok) return result;
+  return { ok: true, value: { ...result.value, staged: false } };
+}
+
+/** `revert()` 的返回值 */
+export interface RevertResult {
+  /** 新生成的反向提交 hash */
+  hash: string;
+  /** 被撤销的提交 hash */
+  reverted: string;
+  /** 新提交的信息 */
+  message: string;
+}
+
+/**
+ * `git revert <commit>` —— 生成一个**新的反向提交**来抵消目标提交的改动
+ * （M5a，服务 5-4「安全反转」与 5-5「危险与安全」）。
+ *
+ * isomorphic-git **没有 revert**（§14 预案），此处用组合实现：
+ *   1. 解析目标提交，取其**父提交**（根提交无父 → 无「反向」可言，明确拒绝）；
+ *   2. 收集「父 tree」与「目标 tree」的路径并集，逐路径比对两侧内容，得出目标提交
+ *      实际引入的改动（新增 / 修改 / 删除）；
+ *   3. **冲突判据**（探针实测）：HEAD 上该路径的当前版本必须等于「目标提交引入的版本」。
+ *      不等说明目标提交之后这条路径又被改过 —— 真 git 会停在这里报冲突，
+ *      本版本不支持冲突 revert，故明确报「当前版本不支持」（与 `rebase` 同款纪律）；
+ *   4. 把反向改动写入工作区与索引，再 `commit` 一个常规提交。
+ *
+ * 提交信息对齐真 git：`Revert "<原提交信息首行>"`。
+ *
+ * @param target ref 表达式（提交 hash / `HEAD~1` / 分支名）
+ */
+export async function revert(
+  target: string,
+  options: RepoOptions = {},
+): Promise<GitResult<RevertResult>> {
+  const base = fsArgs(options);
+  const dir = resolveDir(options);
+  const command = `git revert ${target}`;
+
+  return runGit(command, async () => {
+    const targetOid = await resolveRefInternal(base, options, target);
+    const { commit: targetCommit } = await git.readCommit({ ...base, oid: targetOid });
+
+    if (targetCommit.parent.length === 0) {
+      throw new GitCommandError(
+        'MergeNotSupportedError',
+        '无法撤销根提交 —— 它没有可以对比的前身。',
+        `cannot revert root commit ${targetOid}`,
+        { command, hint: '根提交是历史的起点，撤销它等于删除整条历史。' },
+      );
+    }
+    if (targetCommit.parent.length > 1) {
+      throw new GitCommandError(
+        'MergeNotSupportedError',
+        '本版本不支持撤销合并提交（需要 -m 指定保留哪个父提交）。',
+        `cannot revert merge commit ${targetOid}`,
+        { command, hint: '合并提交有多个父提交，撤销它需要额外说明保留哪一侧。' },
+      );
+    }
+
+    const parentOid = targetCommit.parent[0];
+    const headOid = await unbornSafeHead(base);
+    if (headOid === null) {
+      throw new GitCommandError('NoCommitError', '仓库里还没有任何提交。', 'unborn branch', { command });
+    }
+
+    const beforePaths = await treePathsOf(base, parentOid);
+    const afterPaths = await treePathsOf(base, targetOid);
+    const allPaths = [...new Set([...beforePaths, ...afterPaths])].sort();
+
+    /** 待写入工作区的最终内容；undefined 表示删除该文件 */
+    const toWrite = new Map<string, string | undefined>();
+
+    for (const path of allPaths) {
+      const before = await blobTextAt(base, parentOid, path);
+      const after = await blobTextAt(base, targetOid, path);
+      // 该路径在目标提交里没被改动（两侧同内容）→ 无需反向
+      if (before === after) continue;
+
+      const current = await blobTextAt(base, headOid, path);
+      // ⚠️ 冲突判据：HEAD 上必须是「目标提交引入的那个版本」，否则后续提交又改过它
+      if (current !== after) {
+        throw new GitCommandError(
+          'MergeConflictError',
+          `撤销会产生冲突（${path} 在 ${target} 之后又被修改过），当前版本不支持冲突 revert。`,
+          `revert conflict on ${path}`,
+          {
+            command,
+            hint: '本游戏的 revert 练习不包含「被撤销的改动之后又改过同一文件」的场景。',
+          },
+        );
+      }
+
+      toWrite.set(path, before);
+    }
+
+    if (toWrite.size === 0) {
+      throw new GitCommandError(
+        'NoCommitError',
+        `${target} 没有可撤销的改动。`,
+        `nothing to revert from ${targetOid}`,
+        { command },
+      );
+    }
+
+    // 应用反向改动：写工作区 → 暂存（新增/修改走 add，删除走 remove）
+    const written: string[] = [];
+    const deleted: string[] = [];
+    for (const [path, content] of toWrite) {
+      const absolute = `${dir}/${path}`;
+      if (content === undefined) {
+        try {
+          await fsp.unlink(absolute);
+        } catch {
+          // 文件已不在工作区：索引侧仍需移除
+        }
+        deleted.push(path);
+        continue;
+      }
+      await ensureParentDirsFor(dir, path);
+      await fsp.writeFile(absolute, content);
+      written.push(path);
+    }
+
+    if (written.length > 0) await git.add({ ...base, filepath: written });
+    for (const path of deleted) await git.remove({ ...base, filepath: path });
+
+    const firstLine = targetCommit.message.trim().split('\n')[0];
+    const message = `Revert "${firstLine}"`;
+    const hash = await git.commit({
+      ...base,
+      message,
+      author: { ...LEARNER_IDENTITY },
+      committer: { ...LEARNER_IDENTITY },
+    });
+
+    recordRefMove(options, { from: headOid, to: hash, action: 'revert', detail: `${target}…` });
+
+    return { hash, reverted: targetOid, message };
+  });
+}
+
+/** 取某提交 tree 下的全部 blob 路径 */
+async function treePathsOf(base: ReturnType<typeof fsArgs>, commitOid: string): Promise<Set<string>> {
+  const { commit } = await git.readCommit({ ...base, oid: commitOid });
+  const paths = new Set<string>();
+  await git.walk({
+    ...base,
+    trees: [git.TREE({ ref: commit.tree })],
+    map: async (filepath, entries) => {
+      const entry = entries[0];
+      if (entry && filepath !== '.' && (await entry.type()) === 'blob') paths.add(filepath);
+      return undefined;
+    },
+  });
+  return paths;
+}
+
+/** 取某提交 tree 中指定路径的文本内容；不存在返回 undefined */
+async function blobTextAt(
+  base: ReturnType<typeof fsArgs>,
+  commitOid: string,
+  filepath: string,
+): Promise<string | undefined> {
+  const { commit } = await git.readCommit({ ...base, oid: commitOid });
+  try {
+    const { blob } = await git.readBlob({ ...base, oid: commit.tree, filepath });
+    return new TextDecoder().decode(blob);
+  } catch {
+    return undefined;
+  }
+}
+
+/** 逐级创建仓库内某相对路径的父目录（revert 写回文件时用） */
+async function ensureParentDirsFor(dir: string, relative: string): Promise<void> {
+  const segments = relative.split('/').slice(0, -1);
+  let current = dir;
+  for (const segment of segments) {
+    current += `/${segment}`;
+    try {
+      await fsp.stat(current);
+    } catch {
+      await fsp.mkdir(current, { mode: 0o777 });
+    }
+  }
+}
+
+/**
+ * `git reflog` —— 输出本仓库的 ref 移动历史（M5a，服务 5-6「时间跳跃」）。
+ *
+ * ⚠️ 这不是真 reflog：isomorphic-git 不维护 `.git/logs/`（探针实测 `HEAD@{0}` 解析失败）。
+ * 本层用 `reflog.ts` 的内存日志复刻其**可观察语义**，输出格式与
+ * `docs/notes/git-undo.md` 逐字一致：`<短hash> HEAD@{n}: <action>`。
+ *
+ * @returns 输出行（最新在前，与真 git 相同）；空仓库返回空数组
+ */
+export async function reflog(options: RepoOptions = {}): Promise<GitResult<string[]>> {
+  return runGit('git reflog', async () => formatReflog(options));
+}
+
+
+/**
+ * 解析一个引用（分支名、完整 ref 或 **ref 表达式**）指向的提交 oid。
  * 供 targetState 等需要「分支头」语义的 game service 使用 ——
  * isomorphic-git 的 `resolveRef` 是通用底层原语，此前没有对上出口。
  *
- * @param ref 分支名（如 `main`，自动补全为 refs/heads/main）或完整引用名
+ * ⚠️ M5a 起本函数**支持 ref 表达式**（`HEAD~2` / `HEAD^` / `HEAD@{n}` / 短 hash），
+ * 因为 isomorphic-git 的原生 `resolveRef` 对这些写法一律抛 `NotFoundError`（探针实测，
+ * 见 `refExpr.ts` 文件头的对照表）。求值顺序严格按真 git：
+ *   1. 解析基础名（HEAD / 分支 / 完整 ref / 短 hash）；
+ *   2. 从左到右依次应用后缀（`~n` 沿第一父、`^n` 取第 n 父、`@{n}` 查 reflog）。
+ *
+ * @param ref 分支名（如 `main`，自动补全为 refs/heads/main）、完整引用名，
+ *            或 ref 表达式（如 `HEAD~1` / `HEAD@{0}`）
  */
 export async function resolveRef(
   ref: string,
   options: RepoOptions = {},
 ): Promise<GitResult<string>> {
   const base = fsArgs(options);
-  return runGit(`resolveRef ${ref}`, async () => {
-    // 优先按分支名解析；失败则按完整引用名再试一次（如 MERGE_HEAD）
-    try {
-      return await git.resolveRef({ ...base, ref: `refs/heads/${ref}` });
-    } catch {
-      return await git.resolveRef({ ...base, ref });
+  return runGit(`resolveRef ${ref}`, async () => resolveRefInternal(base, options, ref));
+}
+
+/**
+ * `resolveRef` 的实现体（内部版本，供其它 gitApi 函数复用而不重复 runGit 包装）。
+ *
+ * ⚠️ 参数里同时要 `base`（已组装的 fs 参数）与 `options`（reflog 需要仓库目录做键）：
+ * 前者避免重复调 `fsArgs`，后者是 reflog 表按目录隔离所必需。
+ */
+async function resolveRefInternal(
+  base: ReturnType<typeof fsArgs>,
+  options: RepoOptions,
+  ref: string,
+): Promise<string> {
+  const parsed = parseRefExpr(ref);
+  if (!parsed.ok) {
+    throw new GitCommandError('InvalidRefNameError', parsed.error, `invalid ref: ${ref}`, {
+      command: `git resolveRef ${ref}`,
+    });
+  }
+
+  let oid = await resolveRefBase(base, parsed.ref.base);
+
+  for (const step of parsed.ref.steps) {
+    if (step.kind === 'reflog') {
+      const target = resolveReflogEntry(options, step.n);
+      if (target === null) {
+        throw new GitCommandError(
+          'NotFoundError',
+          `reflog 里没有 HEAD@{${step.n}} 这一条记录（可用 git reflog 查看全部记录）。`,
+          `reflog entry ${step.n} not found`,
+          { command: `git resolveRef ${ref}` },
+        );
+      }
+      oid = target;
+      continue;
     }
+
+    const { commit } = await git.readCommit({ ...base, oid });
+    const wanted = step.kind === 'parent' ? 1 : step.n;
+
+    if (step.kind === 'parent') {
+      // `~n`：沿第一父回溯 n 次，中途遇到根提交即报错（与真 git 的
+      // "fatal: ambiguous argument 'HEAD~3': unknown revision" 同义）
+      let cursor = oid;
+      for (let i = 0; i < step.n; i += 1) {
+        const current = i === 0 ? commit : (await git.readCommit({ ...base, oid: cursor })).commit;
+        if (current.parent.length === 0) {
+          throw new GitCommandError(
+            'NotFoundError',
+            `${ref} 超出了历史起点（沿父提交回溯 ${i + 1} 次时已经到达根提交）。`,
+            `ref ${ref} walks past the root commit`,
+            { command: `git resolveRef ${ref}` },
+          );
+        }
+        cursor = current.parent[0];
+      }
+      oid = cursor;
+      continue;
+    }
+
+    // `^n`：取第 n 个父提交（合并提交有多个父）
+    if (commit.parent.length < wanted) {
+      throw new GitCommandError(
+        'NotFoundError',
+        `${ref} 不存在：该提交只有 ${commit.parent.length} 个父提交，取不到第 ${wanted} 个。`,
+        `ref ${ref} has no parent #${wanted}`,
+        { command: `git resolveRef ${ref}` },
+      );
+    }
+    oid = commit.parent[wanted - 1];
+  }
+
+  return oid;
+}
+
+/**
+ * 解析 ref 表达式的**基础部分**（无后缀）。
+ *
+ * 依次尝试：分支名 → 完整引用名 → 短 hash 前缀。
+ * 短 hash 走 `git.expandOid`（探针实测 `resolveRef` 对短 hash 抛 NotFoundError，
+ * 而 `expandOid` 能正确还原唯一前缀）。
+ */
+async function resolveRefBase(base: ReturnType<typeof fsArgs>, name: string): Promise<string> {
+  // 1) 分支名（`main` → refs/heads/main）
+  try {
+    return await git.resolveRef({ ...base, ref: `refs/heads/${name}` });
+  } catch {
+    // 继续尝试
+  }
+
+  // 2) 完整引用名 / HEAD / 标签（`refs/tags/v1` 等）
+  try {
+    return await git.resolveRef({ ...base, ref: name });
+  } catch {
+    // 继续尝试
+  }
+
+  // 3) 短 hash 前缀：`expandOid` 在无匹配或前缀歧义时抛错
+  if (looksLikeHash(name)) {
+    try {
+      return await git.expandOid({ ...base, oid: name });
+    } catch {
+      throw new GitCommandError(
+        'NotFoundError',
+        `找不到提交 ${name}（hash 前缀不存在或有歧义）。`,
+        `cannot expand oid ${name}`,
+        { command: `git resolveRef ${name}` },
+      );
+    }
+  }
+
+  throw new GitCommandError('NotFoundError', `找不到引用 ${name}。`, `cannot resolve ref ${name}`, {
+    command: `git resolveRef ${name}`,
   });
 }
+
 
 /**
  * 判断某个提交是否为另一提交的祖先（`merged` 目标判定的底层）。
