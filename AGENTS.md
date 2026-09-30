@@ -18,7 +18,7 @@
 
 ## 当前状态
 
-**M1（地基）～ M4（第 2–3 章、GitGraph、BranchPanel、Tab 补全、文件编辑）与 M5a（第五章「时空回溯」+ 快照持久化）均已完成**，三门禁当前为 **`typecheck` 0 / `test` 317 passed / `build` 178.26 kB gzip**（M5a 实测）。下一阶段为 **M5b（第四章「星际连接」+ 本地远程客户端）**。
+**M1（地基）～ M4（第 2–3 章、GitGraph、BranchPanel、Tab 补全、文件编辑）与 M5a（第五章「时空回溯」+ 快照持久化 + 刷新自动恢复中途进度）均已完成**，三门禁当前为 **`typecheck` 0 / `test` 332 passed / `build` 179.69 kB gzip**（M5a 实测）。下一阶段为 **M5b（第四章「星际连接」+ 本地远程客户端）**。
 
 各里程碑的**产出、三门禁历史、实测环境事实与遗留移交**见 **`docs/milestones/README.md`**（索引）与 `docs/milestones/M*-tasks.md`（各期详情），本文件不复述。
 
@@ -39,6 +39,7 @@
 10. **`LevelInit.dirty`（M5a 新增字段）**：`commits` 只能预置「已归档的正确状态」、`files` 只能预置「未追踪的新文件」，**都无法表达「已追踪文件的工作区被改写 / 被误删」** —— 而第五章的叙事前提正是「错误已经发生」。`dirty` 在所有预置提交之后执行；`null` 值走 `fsp.unlink` 而非 `git rm`（后者会把删除记进索引，玩家就不需要「恢复」了）。
 11. **测试环境的 `localStorage`**：本仓库的 jsdom（30.x）**不提供 `window.localStorage`**（`typeof localStorage === 'undefined'`，不是抛错）。`src/__tests__/setup.ts` 已注入内存垫片，**不可删**（与 `fake-indexeddb/auto` 同理）。
 12. **`smoke` 脚本必须在开头 `resetStorage()`**：M5a 起进度落 localStorage，上次冒烟留下的记录会被下次读到（段3 的「无进度时 ch2 锁定」因此失败，实测）。
+13. **不要给 LightningFS 换实例**（M5a 已否决并移除 `mountFs`）：切换出的新实例上 isomorphic-git 的写入会**静默丢失**（`git.init` 返回成功但 `.git` 没落盘）—— 其 `_activate()` 是逐操作惰性异步的，任何等待/读同步点都无法可靠消除该竞态。仓库快照因此走 `persistence/snapshot.ts` 的**显式导出/导入**（fs 单例不动，遍历虚拟根 → 单一 IndexedDB 库 `gtp:snapshots:v1` → 恢复时按「父先于子」写回）；`gtp:active-level:v1` 记「正在哪一关」，boot 的恢复分支**绝不调 `sandbox.reset()`**。
 
 > 另需注意：`development-refinement.md` §8 的「主要命令集」列曾与 GDD 不一致 —— 第一章被误写为 `init, status, log`、第二章被误写为 `add, commit, .gitignore`，**已于 M2 开工前按 GDD 订正**为「一：`init, add, commit`」「二：`status, diff, log, rm, .gitignore`」。§8 是逐章核对过的，其余行与 GDD 一致（个别概括性差异，如三章未列 `switch`、六章列了 `show`/`describe`，属「主要命令」的合理列举）。**若再改 §8，务必与 `game-design.md` 第 4 节的关卡表逐行比对。**
 
@@ -53,7 +54,7 @@ pnpm test            # Vitest（watch 模式）；CI/单次运行用 `pnpm test:
 pnpm smoke:legacy    # 真实浏览器冒烟（真实 Chrome + CDP）；四段独立运行，见 tools/smoke/README.md
 pnpm smoke:ch2
 pnpm smoke:ch3
-pnpm smoke:ch5       # M5a 新增（第五章六关 + 持久化 reload 复核）
+pnpm smoke:ch5       # M5a 新增（第五章六关 + 持久化/刷新恢复复核）
 ```
 
 包管理器：**统一使用 pnpm**（与工程文档 §12 的技术选型一致）。`package.json` 中的 `scripts` 字段供 pnpm 调用，不要改用 npm。
@@ -64,7 +65,7 @@ pnpm smoke:ch5       # M5a 新增（第五章六关 + 持久化 reload 复核）
 > ```
 > 同一原因也会导致 `gh` 不可见（影响推送）。
 
-测试运行器已在 M1 配好：**Vitest + @testing-library/react**（`vite.config.ts` 的 `test` 字段，`environment: 'jsdom'`，`globals: true`），测试置于 `src/__tests__/`。**M5a 后共 10 个文件**：`tokenize.test.ts`(22)、`executor.test.ts`(71)、`targetState.test.ts`(32)、`components.test.tsx`(50)、`levels.test.ts`(54)、`scoring.test.ts`(21)、`inputMode.test.ts`(12)、`refExpr.test.ts`(24)、`persistence.test.ts`(22)、`progression.test.ts`(9) 全部为真实用例（**317 passed**，无 todo）。
+测试运行器已在 M1 配好：**Vitest + @testing-library/react**（`vite.config.ts` 的 `test` 字段，`environment: 'jsdom'`，`globals: true`），测试置于 `src/__tests__/`。**M5a 后共 10 个文件**：`tokenize.test.ts`(22)、`executor.test.ts`(71)、`targetState.test.ts`(32)、`components.test.tsx`(50)、`levels.test.ts`(54)、`scoring.test.ts`(21)、`inputMode.test.ts`(12)、`refExpr.test.ts`(24)、`persistence.test.ts`(37)、`progression.test.ts`(9) 全部为真实用例（**332 passed**，无 todo）。
 
 > ⚠️ `src/__tests__/setup.ts` 里的 `import 'fake-indexeddb/auto'` **不可删除**：jsdom 不提供 `navigator.locks`，LightningFS 的 `DefaultBackend` 会因此回落到需要 `indexedDB` 的 `Mutex` 分支，删掉即全部测试报 `ReferenceError: indexedDB is not defined`。机理详见 `docs/milestones/M1-tasks.md` 的「实测环境事实」第 2 条。
 

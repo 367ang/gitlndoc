@@ -1,6 +1,6 @@
 # M5 任务：撤销与远程、快照持久化（拆分为 M5a / M5b）
 
-> 状态：**进行中**（M5a 开工；M5b 待 M5a 交付后启动）
+> 状态：**M5a DONE**（第五章 + 快照持久化 + 刷新恢复，含二次增补）；**M5b 待启动**
 > 依据：`development-refinement.md` §4/§6/§8/§10/§13/§14（M5 定义）、`game-design.md` §4（第 4–5 章关卡表）、
 > §6.5（持久化）、§10（`reset --hard` 沙箱可恢复裁定）、`docs/milestones/M4-tasks.md`「遗留与移交」。
 > **动 `engine/` 前务必先读 M2 §4、M3、M4 的「实测环境事实」。**
@@ -58,8 +58,8 @@
 
 | 批次 | 内容 | 产出 | 状态 |
 |---|---|---|---|
-| **M5a** | 第五章 6 关（`reset` 三模式 / `restore` / `commit --amend` / `revert` / `reflog`）+ 快照持久化（§10） | 撤销章可玩；进度与仓库快照跨刷新存活 | 进行中 |
-| **M5b** | 第四章 5 关（`remote add` / `push` / `fetch`/`pull` / `clone` / 协作冲突）+ 本地远程客户端 | 远程章可玩；M5 全量交付 | 待启动 |
+| **M5a** | 第五章 6 关（`reset` 三模式 / `restore` / `commit --amend` / `revert` / `reflog`）+ 快照持久化（§10）+ **刷新自动恢复中途进度** | 撤销章可玩；进度与仓库快照跨刷新存活；刷新后回到原关卡继续玩 | ✅ 完成 |
+| **M5b** | 第四章 5 关（`remote add` / `push` / `fetch`/`pull` / `clone` / 协作冲突）+ 本地远程客户端 | 远程章可玩；M5 全量交付 | ⏳ 待启动 |
 
 **为什么这样切**：M5a 的依赖全部在仓库内（isomorphic-git 原语 + 浏览器 Storage），
 可独立跑完三门禁与冒烟；M5b 需要新写协议客户端并让 `/remote.git` 真正参与，
@@ -75,32 +75,32 @@
 
 ### 阶段 1：撤销引擎 `engine/`
 
-- [ ] 1.1 `gitApi` 扩展 `commit()`：支持 `amend`（底层 `git.commit({ amend: true })` 已确认可用）。
+- [x] 1.1 `gitApi` 扩展 `commit()`：支持 `amend`（底层 `git.commit({ amend: true })` 已确认可用）。
   - `--amend --no-edit` 复用原提交信息；`--amend -m` 改写信息；
   - 与既有的 **MERGE_HEAD 双亲机制**、**空提交防御** 的交互必须明确并测到
     （amend 时原提交的父提交保持不变；amend 后旧提交成为孤儿，与真 git 一致）；
   - 真 git 拒绝「amend 后内容与父提交完全一致」的场景（`You have nothing to amend`）——
     需实测 isomorphic-git 行为后决定是否对齐。
-- [ ] 1.2 `gitApi` 新增 `reset()`：`--soft` / `--mixed`（缺省）/ `--hard` 三模式。
+- [x] 1.2 `gitApi` 新增 `reset()`：`--soft` / `--mixed`（缺省）/ `--hard` 三模式。
   - 底层用 `writeRef` 移动当前分支指针 + 按模式同步索引与工作区；
   - **`--hard` 必须真正重写工作区**（isomorphic-git 无 reset，用 `checkout` 的
     `force` 路径或逐文件回写实现，以探针实测为准）；
   - 目标可为 `HEAD~n` / `HEAD@{n}` / 提交 hash / 分支名。
-- [ ] 1.3 `gitApi` 新增 `restore()`：`git restore <path>`（工作区回退到索引版本）
+- [x] 1.3 `gitApi` 新增 `restore()`：`git restore <path>`（工作区回退到索引版本）
    与 `git restore --staged <path>`（索引回退到 HEAD 版本，工作区保留）。
   - 与既有 `checkout -- <path>` 旧语法等价，二者都要支持（笔记 `git-undo.md` 两种都讲）。
-- [ ] 1.4 `gitApi` 新增 `revert()`：生成反向提交（§14 已知 isomorphic-git 无 revert，
+- [x] 1.4 `gitApi` 新增 `revert()`：生成反向提交（§14 已知 isomorphic-git 无 revert，
     用组合实现：读目标提交与其父的 tree diff → 在当前 HEAD 上应用反向改动 → commit）。
   - 冲突场景明确报「当前版本不支持」（与 `rebase` 同款纪律），关卡数据避开；
   - `revert` 的提交信息对齐真 git：`Revert "原提交信息"`。
-- [ ] 1.5 **ref 移动日志（reflog）**：`engine` 层记录每次 ref 移动的
+- [x] 1.5 **ref 移动日志（reflog）**：`engine` 层记录每次 ref 移动的
     `{ from, to, action, ts }`，并新增 `git reflog` 查询出口，输出格式对齐
     `docs/notes/git-undo.md` 的 `"<hash> HEAD@{n}: <action>"`。
   - ⚠️ 记录点在 `gitApi` 的 **ref 写入出口**（commit / reset / checkout 切分支 /
     branch / merge / rebase / revert / push/fetch 的本地 ref 更新），不是散落各处；
   - 日志需在 `sandbox.reset()` 时清空（每关独立）；
   - 是否落盘（随快照持久化）留到阶段 1.5 实测后决定 —— 优先级低于「格式正确」。
-- [ ] 1.6 `resolveRef` 语法扩展：`HEAD~1` / `HEAD~2` / `HEAD^` / `HEAD@{n}` / 短 hash。
+- [x] 1.6 `resolveRef` 语法扩展：`HEAD~1` / `HEAD~2` / `HEAD^` / `HEAD@{n}` / 短 hash。
   - ⚠️ 这是 5-2/5-6 的关键路径：笔记的核心命令就是 `git reset --soft HEAD~1`
     与 `git reset --hard HEAD@{n}`，不做则整个第五章无法照抄笔记操作。
 
@@ -110,15 +110,15 @@ revert 断言「树内容回到目标提交之前、历史向前增长」。
 
 ### 阶段 2：输入层 `game/command/`
 
-- [ ] 2.1 `grammar.ts`：白名单加入 `reset` / `restore` / `revert` / `reflog`，
+- [x] 2.1 `grammar.ts`：白名单加入 `reset` / `restore` / `revert` / `reflog`，
   并补 `commit --amend` 的合法解析（`--amend --no-edit` / `--amend -m <msg>`）。
   - `reset` 的三模式与 `restore --staged` 的参数校验；
   - `checkout -- <path>` 旧语法的解析（笔记 `git-undo.md` 明确保留该写法）。
-- [ ] 2.2 `executor.ts`：分发新命令；**`undoable` 接线** —— §7.2 的撤销类命令
+- [x] 2.2 `executor.ts`：分发新命令；**`undoable` 接线** —— §7.2 的撤销类命令
   （`reset` / `revert` / `checkout --` / `restore`）记 `true`，计分层的撤销扣分由此首次真实生效。
   - ⚠️ 需复核 `game/scoring/score.ts` 的 `countUndoables` 口径：**误操作后的恢复是否该扣两次分**
     （5-6 的教学剧本天然包含一次 `reset --hard` 误操作，扣分设计要在关卡数据里验证不误伤）。
-- [ ] 2.3 `fragments.ts` + `completion.ts`：
+- [x] 2.3 `fragments.ts` + `completion.ts`：
   - ch5 是 `free` 模式（走 M1 的 Terminal），但要确认**片段表在 free 模式下不渲染**且不报错；
   - Tab 补全候选扩展：`HEAD~1` / `HEAD@{0}` 这类 ref 表达式不属候选词表，需实测其可用性。
 
@@ -127,16 +127,16 @@ revert 断言「树内容回到目标提交之前、历史向前增长」。
 
 ### 阶段 3：目标检测 `game/validate/`
 
-- [ ] 3.1 复核 `targetState` 对第五章 6 关的判定能力（决策 ⑤ 依赖现有 target 组合）。
+- [x] 3.1 复核 `targetState` 对第五章 6 关的判定能力（决策 ⑤ 依赖现有 target 组合）。
   - 若 5-2「撤销暂存」需判定「索引干净但工作区有改动」，现有 `workdirClean` 不够用 ——
     先落地实测，必要时用 `file` 的 `content` 目标间接表达；
   - ⚠️ **不得为了过关而放宽判定**（§14）。
-- [ ] 3.2 若 `reset --hard` 误操作需被判定捕捉，明确采用哪种 target 组合，并在关卡注释里写清剧本。
+- [x] 3.2 若 `reset --hard` 误操作需被判定捕捉，明确采用哪种 target 组合，并在关卡注释里写清剧本。
 
 ### 阶段 4：关卡数据 `levels/`
 
-- [ ] 4.1 `presets.ts`：第五章的预置文件（误提交的档案、待丢弃的草稿等，保持精简）。
-- [ ] 4.2 `ch5.ts`：6 关（5-1 修正笔误 / 5-2 撤销暂存 / 5-3 丢弃改动 / 5-4 安全反转 /
+- [x] 4.1 `presets.ts`：第五章的预置文件（误提交的档案、待丢弃的草稿等，保持精简）。
+- [x] 4.2 `ch5.ts`：6 关（5-1 修正笔误 / 5-2 撤销暂存 / 5-3 丢弃改动 / 5-4 安全反转 /
     5-5 危险与安全 / 5-6 时间跳跃），`inputMode: 'free'`，难度按 GDD（★★★ ~ ★★★★★）。
   - 每个预置提交必须带 `files`（M3 空提交防御，M4 已实测的硬约束）；
   - **5-5 的 OR 语义限制**同 3-6：`TargetCondition` 为 AND 语义，本关按「revert 路径」判定
@@ -144,9 +144,9 @@ revert 断言「树内容回到目标提交之前、历史向前增长」。
   - **5-6 的剧本**：预置 3 个提交 → 玩家误 `reset --hard HEAD~2`（或按叙事指定的错误操作）
     → `git reflog` 查看 → `git reset --hard HEAD@{n}` 恢复。目标用 `commitCount eq 3` +
     `commitExists "重要提交"` + `workdirClean` 组合，**只有走过恢复路径才能达成**。
-- [ ] 4.3 `chapters/index.ts`：注册 `CHAPTER_5_LEVELS`，`ch5.playable = true`；
+- [x] 4.3 `chapters/index.ts`：注册 `CHAPTER_5_LEVELS`，`ch5.playable = true`；
   章名对齐 GDD（第五章 → 时空回溯；另 3 处见决策 ⑥）。
-- [ ] 4.4 笔记接入：`levels.test.ts` 的 `?raw` 导入扩到 `git-undo.md`，
+- [x] 4.4 笔记接入：`levels.test.ts` 的 `?raw` 导入扩到 `git-undo.md`，
   `SLUG_BY_HEADING` 补第五章小节表（⚠️ 两套 slug 规则，见 `docs/notes/README.md` 约束 3）。
   - 第五章涉及小节：`### restore 命令` / `### 修改最后一次提交` / `### reset 三种模式` /
     `### revert 命令` / `### 使用 reflog` —— 逐字标题必须与笔记一致。
@@ -156,24 +156,28 @@ revert 断言「树内容回到目标提交之前、历史向前增长」。
 
 ### 阶段 5：快照持久化（§10）
 
-- [ ] 5.1 `src/persistence/progress.ts`：`gtp:progress:v1`（每关得分/星级/通关）、
+- [x] 5.1 `src/persistence/progress.ts`：`gtp:progress:v1`（每关得分/星级/通关）、
   `gtp:achievements:v1`（成就）、`gtp:settings:v1`（设置）。
   - 版本化 key；**损坏数据安全降级**（JSON 解析失败 → 空进度，不白屏）；
   - localStorage 不可用（隐私模式）时静默降级为内存态。
-- [ ] 5.2 `src/persistence/snapshot.ts`：`gtp:snapshot:<levelId>` 的仓库快照（IndexedDB）。
+- [x] 5.2 `src/persistence/snapshot.ts`：仓库快照（IndexedDB）。
   - ⚠️ §10 的策略是「进关建快照；每 N 条命令或关键提交后增量写；退出清除」。
     实现前先实测两条路径：(a) 复用 LightningFS 的 IndexedDB 超级块
     （需给 `fs.ts` 扩展一个 `name` 透传出口并**先 spike 验证**能否可靠往返）；
     (b) 若超级块路径不可靠，退化为**导出虚拟根文件树**（决策 ③ 在 M5b 已用同款做法）。
   **可靠性优先于性能** —— 快照是「刷新不丢进度」的唯一依据。
-- [ ] 5.3 接线：
+  - ✅ **spike 结果：路径 (a) 被实测否决、路径 (b) 落地**（见「刷新恢复的实现与
+    被否决的方案」与探针第 12 条）：`mountFs` 换实例存在无法消除的激活竞态，
+    写入静默丢失；现行实现为显式导出/导入（单一库 `gtp:snapshots:v1`，
+    二进制安全），首版交付时的 `gtp:snapshot:<levelId>` 多库命名已随之移除。
+- [x] 5.3 接线：
   - `store/progressStore.ts` 接入持久化中间件（写回 + 启动加载）；
   - `main.tsx` / `App.tsx` 的 boot：**`hasProgress()` → menu，否则 intro**（清偿 M2 起的 TODO）；
-  - `startLevel()`：进关建快照 / 有快照则询问或自动恢复（交互口径在实现时按最小方案定：
-    优先「自动恢复」，不新增 UI）；退出清除；
+  - `startLevel()`：进关建快照 / 刷新后自动恢复（✅ 用户已裁定「自动恢复中途进度」，
+    经 `app/resumeLevel.ts` 落地）；退出清除（`leaveLevel()`）；
   - ⚠️ `firstAttempt` 成就口径（M3 遗留 2）随持久化一起复核：重启浏览器后
     `clearedBefore` 应仍为 `true`（进度已持久化），M4 的注释已标注此处需复核。
-- [ ] 5.4 ⚠️ **`App.tsx` 的 boot 分流改动会影响 M2–M4 的 3 段冒烟脚本**
+- [x] 5.4 ⚠️ **`App.tsx` 的 boot 分流改动会影响 M2–M4 的 3 段冒烟脚本**
   （它们靠 `seedProgress` 种内存 store 后不 reload）。必须在阶段 6.3 复跑三段冒烟，
   并把种子改为 **localStorage 预填**（或 reload 后重种）。
 
@@ -182,12 +186,12 @@ revert 断言「树内容回到目标提交之前、历史向前增长」。
 
 ### 阶段 6：测试与验收
 
-- [ ] 6.1 新增/修订用例：`executor.test.ts`（撤销命令全链路）、`targetState.test.ts`（如有新判定）、
+- [x] 6.1 新增/修订用例：`executor.test.ts`（撤销命令全链路）、`targetState.test.ts`（如有新判定）、
   `levels.test.ts`（ch5 6 关）、新增 `persistence.test.ts`；修订 M4 遗留的过时断言。
-- [ ] 6.2 三门禁：`typecheck` 0 / `test` 全绿（记录总数）/ `build` 记录 gzip（关注 350 kB 预算）。
-- [ ] 6.3 真实浏览器冒烟：新增 `tools/smoke/run-ch5.cjs`（含**真实键盘输入**，参 M2 教训 3），
+- [x] 6.2 三门禁：`typecheck` 0 / `test` 全绿（记录总数）/ `build` 记录 gzip（关注 350 kB 预算）。
+- [x] 6.3 真实浏览器冒烟：新增 `tools/smoke/run-ch5.cjs`（含**真实键盘输入**，参 M2 教训 3），
   并复跑 `smoke:legacy` / `smoke:ch2` / `smoke:ch3` 确认持久化接线未破坏既有流程。
-- [ ] 6.4 文档收尾：本文件「执行结果」补全 + `docs/milestones/README.md` 索引行 +
+- [x] 6.4 文档收尾：本文件「执行结果」补全 + `docs/milestones/README.md` 索引行 +
   `AGENTS.md`「当前状态」同步。
 
 ## 三、M5b 任务拆解（待 M5a 交付后展开）
@@ -279,6 +283,29 @@ M5 开工前的环境与行为核实（Node v26.9.0 / pnpm 12.5.1 / isomorphic-g
       （与 `rebase` 同款纪律，§14 不伪造）。
     - 未被改动但出现在父/子 tree 差异中的路径（实测 `b.txt` 两侧同内容）会被自然跳过。
 
+### 刷新恢复实现期的关键探针（决定快照方案，全部实测于全新 Chrome profile）
+
+12. **「每关一个 LightningFS 实例」方案被否决**（`mountFs`，已移除）：
+    切换出的新实例上，isomorphic-git 的写入会**静默丢失** —— `git.init` 返回
+    成功但 `/repo/.git` 不存在、后续 `mkdir` 报 `ENOENT: /repo`。逐步隔离后
+    定位到 LightningFS 的 `_activate()` 是**逐操作惰性异步**的（读 IndexedDB
+    superblock + 申请 `navigator.locks`），新实例的首次写操作与激活存在竞态；
+    `stat('/')`、`readdir('/')`、延时等待、warmup 写都**不能**可靠消除。
+    对照组：同一实例上手工 `mkdir`/`writeFile` 全部正常，直接 `git.init({ fs: f })`
+    （经 Vite 依赖 URL 导入）也正常 —— 唯独 `mountFs` + 引擎调用链失败。
+    而引擎 M1~M5 的全部已验证语义都建立在「单一稳定 fs 实例」上，换实例等于
+    推翻地基。**结论：fs 单例保持不动，快照走显式导出/导入。**
+13. **LightningFS 的 superblock 落盘是防抖 500ms 的**（其 `DefaultBackend`
+    构造即注册 `debounce(() => this.flush(), 500)`），「卸载/刷新页面」不等它
+    —— 显式导出方案因此**不依赖**它（数据由 `fsp` 遍历后由我们写 IndexedDB）；
+    `flushFs()` 保留但仅用于收敛 `gitlndoc-fs` 自身持久化的漂移。
+14. **`indexedDB.open` 的调用必须经 `globalThis.indexedDB`**：把 `globalThis`
+    直接断言成 `IDBFactory` 去调 `.open`，实际调的是 **window.open**（返回
+    undefined）—— 这曾让「快照库存在性检查」永远失败（实测踩到）。
+15. **`about:blank` 上调 `indexedDB.databases()` 抛 `SecurityError: denied in
+    this context`**（全新 Chrome profile 首开实测）—— 冒烟脚本的清库逻辑
+    必须等**应用 UI** 出现（到达 app 源）再执行，不能只看 `readyState`。
+
 ---
 
 ## 执行结果（M5a 完成，Lead 记录）
@@ -310,9 +337,12 @@ M5 开工前的环境与行为核实（Node v26.9.0 / pnpm 12.5.1 / isomorphic-g
 
 **持久化 `persistence/`（新增目录，§10）**
 - `progress.ts` —— `gtp:progress:v1` / `gtp:achievements:v1` / `gtp:settings:v1`。
-- `snapshot.ts` —— 快照库命名（`gtp:snapshot:<levelId>`）与清理。
-- `boot.ts` —— 持久化接线与 `boot → intro/menu` 分流判据。
-- `store/progressStore.ts` 接入 `hydrate()` / 落盘；`main.tsx` / `App.tsx` / `startLevel.ts` 接线。
+- `snapshot.ts` —— 仓库快照的**显式导出/导入**（单一库 `gtp:snapshots:v1`，
+  二进制安全）+ 挂起关卡记录 `gtp:active-level:v1`。
+- `boot.ts` —— 持久化接线、`boot → intro/menu` 分流判据、恢复分支入口。
+- `app/resumeLevel.ts`（二次增补新增）—— 刷新恢复编排：导入快照 → 复位会话 → 切视图。
+- `store/progressStore.ts` 接入 `hydrate()` / 落盘；`main.tsx` / `App.tsx` /
+  `startLevel.ts`（含 `leaveLevel()`）/ LevelScreen / LevelComplete 接线。
 
 **测试与冒烟**
 - 新增 `refExpr.test.ts`(24)、`persistence.test.ts`(22)、`progression.test.ts`(9)；
@@ -328,10 +358,11 @@ M5 开工前的环境与行为核实（Node v26.9.0 / pnpm 12.5.1 / isomorphic-g
 | 门禁 | 结果 |
 |---|---|
 | `pnpm typecheck` | **0 错误** |
-| `pnpm test:run` | **317 passed**，0 failed（10 个测试文件） |
-| `pnpm build` | **178.26 kB gzip**（预算 ~350 kB，余量充足） |
+| `pnpm test:run` | **332 passed**，0 failed（10 个测试文件） |
+| `pnpm build` | **179.69 kB gzip**（预算 ~350 kB，余量充足） |
 
-对比 M4：228 → **317**（+89 用例）、169.73 → 178.26 kB gzip（+8.5 kB）。
+对比 M4：228 → **332**（+104 用例）、169.73 → 179.69 kB gzip（+10 kB）。
+（首版交付时为 317 / 178.26 kB；「刷新恢复」二次增补后为上表值。）
 
 ### 真实浏览器冒烟（四段全绿，两轮连跑无 flake）
 
@@ -340,14 +371,17 @@ M5 开工前的环境与行为核实（Node v26.9.0 / pnpm 12.5.1 / isomorphic-g
 | `smoke:legacy` | **8/8** | 段3：1-4 完整通关 + 未通关锁定态 |
 | `smoke:ch2` | **8/8** | 段1：ch2 四关 + 章节解锁 |
 | `smoke:ch3` | **15/15** | 段2：ch3 六关 + GitGraph + ch5 解锁链路（M5a 追加 1 断言） |
-| `smoke:ch5` | **33/33** | **M5a 新增**：第五章六关全流程 + 持久化 reload 复核 |
+| `smoke:ch5` | **41/41** | **M5a 新增**：第五章六关全流程 + 持久化 reload 复核 + **刷新自动恢复中途进度** |
 
-合计 **64/64**。ch5 段覆盖：free 模式**真实键盘输入**（CDP `Input.insertText`）、
-`--amend` 替换而非追加、`restore --staged` 保住工作区、`restore` 找回误删、
-`revert` 反向提交、**完整「误 reset --hard → reflog → HEAD@{1} 恢复」剧本**、
-进度落 localStorage 且 **reload 后仍在**。
+合计 **72/72**（8 + 8 + 15 + 41），ch5 段两轮连跑无 flake。ch5 段覆盖：free 模式
+**真实键盘输入**（CDP `Input.insertText`）、`--amend` 替换而非追加、
+`restore --staged` 保住工作区、`restore` 找回误删、`revert` 反向提交、
+**完整「误 reset --hard → reflog → HEAD@{1} 恢复」剧本**、
+进度落 localStorage 且 **reload 后仍在**，以及**刷新恢复三断言**：
+reload 后仍在同一关（不回菜单）、仓库内容原样读回（先前 restore 的文件内容
+逐字一致）、恢复的会话可继续操作并正常通关。
 
-### 执行中发现并修正的缺陷（8 个，全部有回归测试或冒烟覆盖）
+### 执行中发现并修正的缺陷（10 个，全部有回归测试或冒烟覆盖）
 
 1. **`parseRefExpr` 对普通分支名全线失败**（`engine/refExpr.ts`）：早期实现用「边扫边解析」
    的循环，首字符是字母时立即 break，`index` 停在 0 → base 变空串 →
@@ -380,6 +414,37 @@ M5 开工前的环境与行为核实（Node v26.9.0 / pnpm 12.5.1 / isomorphic-g
 8. **`enterLevel` 的就绪判据必须区分输入模式**：menu / half 模式渲染 `command-preview`，
    而 **free 模式（第五章起）渲染 Terminal 的 `[aria-label="命令输入"]`** ——
    沿用旧判据必然超时（实测）。已改为「二者其一 + 页面含关卡 id」。
+9. **`globalThis` 不能直接当 `IDBFactory` 用**：`(globalThis as IDBFactory).open(...)`
+   实际调用的是 **window.open**（返回 undefined），快照库存在性检查因此永远失败。
+   必须经 `globalThis.indexedDB` 取工厂（见探针第 14 条）。
+10. **`resetStorage` 清库必须在应用页面上做**：`about:blank` 的 `readyState` 也是
+   `'complete'`，但 IndexedDB 在该上下文被浏览器拒绝（`SecurityError: denied in
+   this context`，全新 profile 首开实测）—— 清库逻辑改为等应用 UI 出现再执行。
+
+### 刷新恢复的实现与被否决的方案（二次增补，用户裁定「自动恢复中途进度」）
+
+**最终方案 = 显式导出/导入**（fs 单例全程不动）：
+
+- **导出**（`exportSnapshot`）：`fsp` 遍历虚拟根，目录条目与文件条目（`Uint8Array`，
+  二进制安全）一起序列化，写进单一库 `gtp:snapshots:v1`（按 `levelId` 存取）。
+  目录条目与文件同等重要 —— 少了它们，恢复时 `/repo` 整个建不出来（实测）。
+- **时机**：进关预置完成后（**先导出成功才写挂起标记**，绝不出现「标记在而快照不在」，
+  否则恢复分支会以为可以恢复、实际却拿不到仓库）；每条命令执行后（LevelScreen
+  异步触发，失败仅影响恢复点新旧）；`leaveLevel()` 清除（**先清标记再删快照**）。
+- **导入**（`importSnapshot`）：清空虚拟根 → 按「父目录先于子目录」的键序
+  `mkdir` 全部目录 → 写回全部文件。无快照/版本不符/快照为空 → 返回 false，
+  boot 降级为「进菜单」，**绝不把玩家放进空仓库**。
+- **编排**（`app/resumeLevel.ts`）：导入快照 → 复位会话（命令历史与拼接草稿
+  **不恢复**——它们是「玩家刚敲了什么」的临时痕迹）→ `firstAttempt: false`
+  （恢复的会话不是首次尝试）→ 切视图。恢复分支**绝不调 `sandbox.reset()`**。
+- **boot 分流**：`main.tsx` 先跑 `resumeInterruptedLevel()`；成功则跳过空沙箱
+  初始化与 intro/menu 分流（`App.tsx` 检测视图已非 `boot` 即不再覆盖）。
+
+**被否决的方案**：「每关一个 LightningFS 实例（`mountFs` 按库名切换）」——
+见上方探针第 12 条，因 LightningFS 激活竞态导致写入静默丢失而被实测否决，
+相关 API 已全部移除。该弯路的教训：**持久化机制不要依赖第三方库的内部
+生命周期**（激活/锁/防抖都是黑盒），用自己写的数据通路（遍历 + IndexedDB）
+行为确定、可单测、可冒烟验证。
 
 ### 新增能力：`LevelInit.dirty`（第五章的前提）
 
@@ -419,13 +484,9 @@ M5 开工前的环境与行为核实（Node v26.9.0 / pnpm 12.5.1 / isomorphic-g
    （fail-fast，不伪造）。`TargetCondition.remote` 仍为 `implemented: false`。
 2. **ch6（标签）与终章 F 属 M6**：`TagCondition.tag` 同上。
 3. **`stash` 不做**（M5 决策 ④）：语法层继续回「该版本不支持」。
-4. **快照的恢复路径未接 UI**：`snapshot.ts` 提供了库命名与清理，
-   LightningFS 自身会把每关的 fs 持久化在该库里（`fileDbName`），
-   但**「刷新后自动恢复到关卡中途」的用户可见行为尚未接线** —— 当前刷新会回到
-   boot 分流（有进度 → 菜单），而不会自动跳回关卡内。是否要做「恢复中途进度」
-   属产品决策，留给 M5b/M7 与用户确认（见下方「待用户确认」）。
-   ⚠️ 另外 `clearSnapshot()` 因 LightningFS 未公开关闭单例的出口，
-   删库可能触发 `onblocked`（已设立即放行，不会卡 UI，但旧库可能残留）。
+4. ~~快照的恢复路径未接 UI~~ → **M5a 二次增补已落地**（用户裁定「自动恢复
+   关卡中途进度」）：刷新后 `resumeLevel()` 把快照导入虚拟根并直接回到原关卡，
+   不回菜单、不重置仓库。实现与实测见「刷新恢复的实现与被否决的方案」一节。
 5. **`gtp:settings:v1`** 有读写函数与测试，但**尚无 UI 消费方**（提示开关属 M7 打磨）。
 6. **`firstAttempt` 口径已复核**（清偿 M3 遗留 2）：进度持久化后，
    「重启浏览器再重玩某关」不再被误判为首次尝试。
@@ -433,9 +494,8 @@ M5 开工前的环境与行为核实（Node v26.9.0 / pnpm 12.5.1 / isomorphic-g
    与前三章持平，5-6 的「误操作 + 恢复」会记两次 undoable（扣 30 分），
    在 `winScore: 75` 下仍可达 ★★，属有意的设计（惩罚鲁莽但不阻断教学）。
 
-### 待用户确认（M5b 开工前）
+### 用户裁定（M5a 收尾时确认）
 
-- **快照恢复的产品口径**：刷新关卡页后应「自动恢复中途进度」还是「回菜单重新开始」？
-  前者要接 UI 与恢复时序（风险：恢复出的仓库状态与目标判定的交互），
-  后者则 `snapshot.ts` 只需保留清理职责（当前实现即按此）。
-- M5b 的定稿已在本文档 §三，可直接开工。
+- **快照恢复的产品口径 = 「自动恢复关卡中途进度」**：刷新关卡页后应回到
+  原关卡继续玩，而不是回菜单重新开始。已按此口径实现并验收（见下节）。
+- M5b 的定稿在本文档 §三，可直接开工。
