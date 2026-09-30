@@ -40,11 +40,15 @@ export function App({ bootError }: AppProps) {
     if (booted) return
     setBooted(true)
 
-    // M5a（§5 / §10）：按「是否有存档进度」分流 —— 有进度直接进菜单，
-    // 否则走 intro 的世界观引导。进度由 `main.tsx` 在渲染前 `hydrateProgress()` 载入。
+    // M5a：刷新恢复（「自动恢复关卡中途进度」）已在 `main.tsx` 里把视图切到
+    // `level` —— 此时**绝不能**再按进度分流把它覆盖回 menu/intro。
+    // 进度由 `main.tsx` 在渲染前 `hydrateProgress()` 载入。
+    if (view !== 'boot') return
+
+    // 按「是否有存档进度」分流：有进度直接进菜单，否则走 intro 的世界观引导。
     if (hasSavedProgress()) goMenu()
     else goIntro()
-  }, [booted, goIntro, goMenu])
+  }, [booted, goIntro, goMenu, view])
 
   return (
     <div className={styles.app}>

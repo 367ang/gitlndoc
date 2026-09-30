@@ -87,6 +87,30 @@ export interface CreateFsOptions {
   wipe?: boolean;
 }
 
+/**
+ * 把全局单例的当前文件系统状态**强制落盘**（M5a）。
+ *
+ * ⚠️ 为什么需要它：LightningFS 的 superblock 落盘是**防抖 500ms** 的（其
+ * `DefaultBackend` 构造即注册 `debounce(() => this.flush(), 500)`），而「卸载 /
+ * 刷新页面」不会等待这个定时器 —— 实测「写完立刻刷新」会丢失最后一次写入。
+ *
+ * ⚠️ ⚠️ **它不再承担「快照恢复」职责**：曾尝试「每关一个 LightningFS 实例 +
+ * 本函数固化」的方案，已被实测否决并移除 —— LightningFS 的 `_activate()` 是
+ * 逐操作惰性异步的，切换出的新实例上第一串写操作会静默丢失（`git.init` 返回
+ * 成功但 `.git` 没落盘），任何等待/读同步点都无法可靠消除该竞态。
+ * 快照现由 `persistence/snapshot.ts` 的**显式导出/导入**承担，本函数仅用于
+ * 把当前实例自身的持久化状态（`gitlndoc-fs` 库）收敛到最新，减少两份数据的漂移。
+ *
+ * 失败静默忽略：落盘失败最坏是「这次刷新恢复不了」，不该阻断游戏流程。
+ */
+export async function flushFs(): Promise<void> {
+  try {
+    await getFs().promises.flush();
+  } catch {
+    // 忽略：flush 失败不影响当前会话继续玩
+  }
+}
+
 /** 浏览器环境下的默认数据库名 */
 export const DEFAULT_DB_NAME = 'gitlndoc-fs';
 

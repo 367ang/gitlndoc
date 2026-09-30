@@ -471,29 +471,55 @@ async function histCount() {
  * 故这里自己负责导航（storage 是 per-origin 的，必须先有页面）。
  */
 async function resetStorage() {
-  // 先确保有一个同源页面（storage / indexedDB 都是 per-origin）
+  // 先确保有一个同源页面（storage / indexedDB 都是 per-origin）。
+  // ⚠️ 必须等**应用 UI**出现而不是 readyState：about:blank 的 readyState 也是
+  //    'complete'，在那上面调 indexedDB 会得到 SecurityError「denied in this
+  //    context」（全新 Chrome profile 首开实测），清库就静默失败了。
   await send('Page.navigate', { url: APP });
-  await waitFor(`document.readyState !== 'loading'`, '页面就绪（为清 storage 做准备）', 20000);
+  await waitFor(
+    `!!document.querySelector('[data-testid="progress-summary"]') || [...document.querySelectorAll('button')].some(b => b.textContent.includes('进入时间线检修台'))`,
+    '页面就绪（应用 UI 出现，已到达 app 源）',
+    30000,
+  );
   await sleep(200);
 
   await evalJs(`(() => {
     try {
-      ['gtp:progress:v1', 'gtp:achievements:v1', 'gtp:settings:v1'].forEach((k) => localStorage.removeItem(k));
+      // ⚠️ 必须连 gtp:active-level:v1 一起清 —— 它是「刷新后自动恢复关卡中途进度」
+      //    的依据（M5a）。不清的话下一次 boot 会直接恢复到上次那一关，
+      //    脚本还停在菜单等着点「查看章节」，于是超时（实测踩到）。
+      ['gtp:progress:v1', 'gtp:achievements:v1', 'gtp:settings:v1', 'gtp:active-level:v1']
+        .forEach((k) => localStorage.removeItem(k));
     } catch (e) { /* storage 不可用时忽略 */ }
     return true;
   })()`);
 
-  // 删除快照库（best-effort：onblocked 时立即放行，绝不挂住）
+  // ⚠️ 先 reload 一次再删库：应用运行期间 LightningFS 持有快照库的连接，
+  //    此时 `deleteDatabase` 只会触发 `onblocked` 而**不会真正删除**（实测：
+  //    删完再 reload，下一次 boot 又恢复到了上次那一关，脚本卡在菜单）。
+  //    导航离开后连接被释放，删库才能真正生效。
+  await reload();
+  await sleep(400);
+
   await evalJs(`(async () => {
-    if (typeof indexedDB === 'undefined' || typeof indexedDB.databases !== 'function') return true;
+    if (typeof indexedDB === 'undefined' || typeof indexedDB.databases !== 'function') return 0;
     const dbs = await indexedDB.databases();
-    await Promise.all(dbs
+    const names = dbs
       .map((d) => d.name)
-      .filter((n) => typeof n === 'string' && n.startsWith('gtp:snapshot:'))
-      .map((n) => new Promise((resolve) => {
-        const r = indexedDB.deleteDatabase(n);
-        r.onsuccess = r.onerror = r.onblocked = () => resolve();
-      })));
+      .filter((n) => typeof n === 'string' && n.startsWith('gtp:snapshot:'));
+    await Promise.all(names.map((n) => new Promise((resolve) => {
+      const r = indexedDB.deleteDatabase(n);
+      r.onsuccess = r.onerror = r.onblocked = () => resolve();
+    })));
+    return names.length;
+  })()`);
+
+  // 再清一次 localStorage（首页导航后应用可能已重建会话）并 reload 到干净态
+  await evalJs(`(() => {
+    try {
+      ['gtp:progress:v1', 'gtp:achievements:v1', 'gtp:settings:v1', 'gtp:active-level:v1']
+        .forEach((k) => localStorage.removeItem(k));
+    } catch (e) { /* storage 不可用时忽略 */ }
     return true;
   })()`);
 

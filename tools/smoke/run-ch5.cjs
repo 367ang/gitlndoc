@@ -24,14 +24,17 @@ const H = require('./cdp-client.cjs');
 (async () => {
   await H.connect();
   await H.installCounter();
+  // ⚠️ 必须先清持久化状态：M5a 起进度落 localStorage，且**刷新会自动恢复
+  //    上次所在的关卡** —— 上一次冒烟跑到 5-3 就中断的话，这次 boot 会直接
+  //    恢复到 5-3，脚本却停在菜单等着进 5-1，于是超时（实测踩到）。
+  await H.resetStorage();
   await H.openApp();
 
   // ── 种子：ch1~ch3 全通关 → ch5 解锁 ──
-  // ⚠️ ch5 的前置是「第四章通关」（progression 按 order 取前一章）……
-  //    ch4 属 M5b、尚未实现故无关卡，`isChapterCleared('ch4')` 恒为 false，
-  //    因此 ch5 目前**无法通过正常流程解锁**。这是 M5a 交付时的已知事实
-  //    （见 docs/milestones/M5-tasks.md「执行结果 · 遗留与移交」）。
-  //    本脚本改用「直接进关」的路径验证第五章本身，不依赖解锁链路。
+  // ⚠️ ch5 的解锁前置**已由 M5a 修订**：`isChapterUnlocked` 会跳过尚未实现的
+  //    章节（ch4 属 M5b、关卡数为 0），回溯到最近一个有关卡的章节 ch3 ——
+  //    因此「ch1~ch3 全通关 ⇒ ch5 解锁」现在成立（`progression.test.ts` 有回归锁）。
+  //    本脚本仍走「直接进关」的路径，以缩短冒烟耗时。
   await H.seedProgress(['ch1-1', 'ch1-2', 'ch1-3', 'ch1-4', 'ch2-1', 'ch2-2', 'ch2-3', 'ch2-4', 'ch3-1', 'ch3-2', 'ch3-3', 'ch3-4', 'ch3-5', 'ch3-6']);
   H.check('种子 ch1~ch3 全通关', true);
 
@@ -200,6 +203,70 @@ const H = require('./cdp-client.cjs');
     'reload 后进度仍在（M5a 持久化生效，清偿 M4 遗留 1）',
     afterReload >= 15,
     `reload 后记录数=${afterReload}`,
+  );
+
+  // ── 刷新恢复：自动恢复关卡中途进度（M5a 用户裁定的产品口径）──
+  //
+  // ⚠️ 这是本段最重要的一组断言，且**只有真实浏览器能验**：
+  //    jsdom 里 LightningFS 走 MemoryBackend，不写 IndexedDB，
+  //    故「快照能否跨刷新读回」在单测中无法证明（见 persistence.ts 的说明）。
+  //
+  //    验收路径：进关 → 做几步操作 → reload → 应**仍在同一关**且仓库状态还在。
+  await H.enterLevel('ch5-3', '丢弃改动');
+  // 先恢复一个文件，制造「中途进度」（另一个先不管）
+  let mid = await H.runFree('git restore notes/时间线校准参数.md');
+  H.check('恢复前：执行一步 restore 成功', mid && mid.ok === true, mid && mid.error);
+  H.check('关卡尚未过关（只完成一半）', (await H.evalJs(`!!document.querySelector('[aria-label="命令输入"]')`)) === true);
+
+  const activeBefore = await H.evalJs(`localStorage.getItem('gtp:active-level:v1')`);
+  H.check(
+    '进关后已记下挂起关卡（gtp:active-level:v1）',
+    typeof activeBefore === 'string' && activeBefore.includes('ch5-3'),
+    typeof activeBefore === 'string' ? activeBefore : String(activeBefore),
+  );
+
+  // 刷新 —— 应自动恢复到 ch5-3，而不是回菜单
+  await H.reload();
+  await H.waitFor(
+    `!!document.querySelector('[aria-label="命令输入"]')`,
+    'reload 后自动回到关卡页（而非菜单）',
+    30000,
+  );
+  const viewAfterReload = await H.evalJs(`(async () => {
+    const v = await import('/src/store/viewStore.ts');
+    const s = await import('/src/store/sessionStore.ts');
+    return { view: v.useViewStore.getState().view, level: s.useSessionStore.getState().level?.id ?? null };
+  })()`);
+  H.check(
+    'reload 后直接回到 ch5-3（视图为 level，未回菜单）',
+    viewAfterReload.view === 'level' && viewAfterReload.level === 'ch5-3',
+    JSON.stringify(viewAfterReload),
+  );
+
+  // 仓库状态必须还在：先前 restore 过的文件应是归档版本
+  const restoredContent = await H.evalJs(`(async () => {
+    const fs = await import('/src/engine/fs.ts');
+    try { return await fs.fsp.readFile('/repo/notes/时间线校准参数.md', 'utf8'); }
+    catch (e) { return 'READ_FAIL:' + e.message; }
+  })()`);
+  H.check(
+    'reload 后仓库内容仍在（先前 restore 的结果保留）',
+    typeof restoredContent === 'string' && restoredContent.includes('阈值：0.75'),
+    String(restoredContent).slice(0, 80),
+  );
+
+  // 继续通关本关（证明恢复后的会话是**可继续玩**的，不只是「看起来在关卡页」）
+  mid = await H.runFree('git restore notes/关键档案.md');
+  H.check('恢复后能继续操作（第二条 restore 成功）', mid && mid.ok === true, mid && mid.error);
+  await H.waitSettled('ch5-3');
+  H.check('恢复的会话可正常通关', true);
+  await H.backToMenu();
+
+  const activeCleared = await H.evalJs(`localStorage.getItem('gtp:active-level:v1')`);
+  H.check(
+    '离开关卡后挂起标记被清掉（避免刷新被拉回已结束的关卡）',
+    activeCleared === null,
+    String(activeCleared),
   );
 
   const ok = H.summarize('ch5');

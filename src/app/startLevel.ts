@@ -3,8 +3,9 @@
 // 把「进入一关」这条跨三层的流程收成一个命令式函数，供 menu / chapter /
 // levelComplete 三处复用：
 //   1. `sandbox.reset(level.init)` —— 重建沙箱仓库（§6.1「每关开始：清空虚拟根」）；
-//   2. `sessionStore.startLevel(level)` —— 写入真实关卡，并复位上一关的历史 / 输入 / 目标；
-//   3. `viewStore.goLevel(levelId)` —— 切到关卡视图。
+//   2. 导出仓库快照 + 记下「正在哪一关」（M5a，刷新恢复的依据）；
+//   3. `sessionStore.startLevel(level)` —— 写入真实关卡，并复位上一关的历史 / 输入 / 目标；
+//   4. `viewStore.goLevel(levelId)` —— 切到关卡视图。
 //
 // ⚠️⚠️ 本流程**必须由事件回调调用**（按钮 onClick），**绝不可放进 React effect**：
 // StrictMode 下 effect 会执行两次，而 `reset()` 会清空整个虚拟根 ——
@@ -21,7 +22,12 @@
 
 import { getLevel } from '../levels/chapters'
 import { reset } from '../engine/sandbox'
-import { clearSnapshot } from '../persistence/snapshot'
+import {
+  clearActiveLevel,
+  clearSnapshot,
+  exportSnapshot,
+  saveActiveLevel,
+} from '../persistence/snapshot'
 import { useSessionStore } from '../store/sessionStore'
 import { useProgressStore } from '../store/progressStore'
 import { useViewStore } from '../store/viewStore'
@@ -61,7 +67,22 @@ export async function startLevel(levelId: string): Promise<StartLevelResult> {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   }
 
-  // 2) 写入会话（顺带复位上一关的历史 / 输入 / 目标判定）
+  // 2) 固化初始快照 + 记下「正在哪一关」（M5a，刷新恢复的依据）。
+  //
+  //    ⚠️ 顺序约束：**必须先 exportSnapshot 成功，再写挂起标记**。
+  //    反过来则可能出现「标记在而快照不在」—— boot 的恢复分支会以为可以恢复，
+  //    实际却拿不到仓库内容（宁可让玩家回菜单重新进关，也不能恢复出空仓库）。
+  //    ⚠️ exportSnapshot 失败时**不阻断进关**（快照是体验优化，不是游玩前提），
+  //    但**不写挂起标记** —— 这样刷新后走「回菜单」的保守路径，绝不伪造可恢复。
+  try {
+    await exportSnapshot(level.id)
+    saveActiveLevel(level.id)
+  } catch (error) {
+    console.warn(`[startLevel] 导出 ${level.id} 的初始快照失败，本次刷新将无法恢复：`, error)
+    clearActiveLevel()
+  }
+
+  // 3) 写入会话（顺带复位上一关的历史 / 输入 / 目标判定）
   const session = useSessionStore.getState()
   session.setLevel(level)
   session.clearHistory()
@@ -74,7 +95,31 @@ export async function startLevel(levelId: string): Promise<StartLevelResult> {
   const clearedBefore = useProgressStore.getState().levelRecords[level.id]?.cleared === true
   session.setSettlement({ hintsUsed: 0, firstAttempt: !clearedBefore })
 
-  // 3) 切视图
+  // 4) 切视图
   useViewStore.getState().goLevel(level.id)
   return { ok: true, levelId: level.id }
+}
+
+/**
+ * 离开关卡（回菜单 / 通关后返回）时的清理（M5a）。
+ *
+ * 三件事：
+ *   1. 清掉 `gtp:active-level:v1` —— 否则下次刷新会**恢复到一个已经离开的关卡**；
+ *   2. 删掉该关的快照（§10「退出关卡清除」）；
+ *   3. 复位会话（当前关卡 / 历史 / 草稿 / 目标）。
+ *
+ * ⚠️ 与 `startLevel()` 的「清上一关快照」有重叠但不重复：
+ *    `startLevel` 走的是「关卡 A → 关卡 B」的路径（会话里还留着 A）；
+ *    本函数走的是「关卡 → 菜单」的路径（会话即将被清空）。
+ *    两条路径都必须清理，因为会话状态在其中一条上会被提前复位。
+ */
+export async function leaveLevel(): Promise<void> {
+  const current = useSessionStore.getState().level?.id
+  // ⚠️ 先清标记再删快照：即使删快照失败，「挂起标记已清」也能保证
+  //    boot 的恢复分支不会被走进来（宁可多占一点空间，不能恢复错状态）。
+  clearActiveLevel()
+  if (current !== undefined) {
+    await clearSnapshot(current)
+  }
+  useSessionStore.getState().resetSession()
 }

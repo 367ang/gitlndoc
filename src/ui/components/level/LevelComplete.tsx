@@ -16,7 +16,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { getChapterLevels, getLevel } from '../../../levels/chapters'
-import { startLevel } from '../../../app/startLevel'
+import { leaveLevel, startLevel } from '../../../app/startLevel'
 import { useSessionStore } from '../../../store/sessionStore'
 import { useProgressStore } from '../../../store/progressStore'
 import { useViewStore } from '../../../store/viewStore'
@@ -104,6 +104,24 @@ export function LevelComplete() {
     if (!result.ok) setError(result.error)
   }
 
+  /**
+   * 返回菜单（M5a）。
+   *
+   * ⚠️ 必须走 `leaveLevel()` 而不是直接 `goMenu()`：本关已经**结算完成**，
+   * 若不清掉 `gtp:active-level:v1`，玩家刷新浏览器后会被「恢复」回一个已经
+   * 通关的关卡 —— 那不是「恢复中途进度」，而是把结算页当成了存档点。
+   * `leaveLevel()` 同时负责删掉本关快照并复位会话。
+   */
+  async function handleBackToMenu() {
+    setBusy(true)
+    try {
+      await leaveLevel()
+    } finally {
+      setBusy(false)
+      goMenu()
+    }
+  }
+
   return (
     <section className={styles.screen}>
       <p className={styles.badge}>过关</p>
@@ -173,7 +191,7 @@ export function LevelComplete() {
             重玩本关
           </button>
         )}
-        <button className={styles.secondary} type="button" onClick={goMenu} disabled={busy}>
+        <button className={styles.secondary} type="button" onClick={() => void handleBackToMenu()} disabled={busy}>
           返回菜单
         </button>
       </div>

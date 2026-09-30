@@ -21,7 +21,7 @@
 
 import type { LevelInit } from '../game/types';
 import { GitCommandError, GitUnsupportedError, runGit, type GitResult } from './errors';
-import { clearSandboxRoot, ensureSandboxRoot, fsp, REPO_DIR } from './fs';
+import { clearSandboxRoot, ensureSandboxRoot, flushFs, fsp, REPO_DIR } from './fs';
 import * as gitApi from './gitApi';
 import { DEFAULT_BRANCH } from './gitApi';
 import { clearReflog } from './reflog';
@@ -143,6 +143,17 @@ export async function reset(init: LevelInit = {}): Promise<GitResult<SandboxStat
   if (!scope.ok) return scope;
 
   return runGit('sandbox reset', async () => {
+    // 0) 先把**上一个** fs 实例的挂起写入落盘并让它静默，再清空虚拟根。
+    //
+    //    ⚠️ 这一步是 M5a 实测逼出来的（快照切换库名后才暴露）：
+    //    LightningFS 的 `saveSuperblock` 是防抖 500ms 的，且 `_deactivate`（最后一次
+    //    操作后 500ms 触发）会把**它自己缓存里的 superblock** 写回数据库。
+    //    于是「清空 → 重建 → 提交」这一串刚做完，上一个实例的定时器一响，
+    //    旧目录树就被写了回去 —— 现象是仓库里出现**上一次的残留文件**
+    //    （实测：`reset()` 后 `/repo` 里是 `x.md` 而不是本次预置的 `notes/`）。
+    //    先 flush 让状态确定，再清空，可消除这个竞态。
+    await flushFs();
+
     // 1) 清空虚拟根（复用 fs.ts，不自行递归删除）
     await clearSandboxRoot();
     // 2) 重建 /repo 与 /remote.git 两级目录

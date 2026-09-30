@@ -29,6 +29,8 @@ import { GitGraph } from '../gitGraph/GitGraph'
 import { FileTree } from '../fileTree/FileTree'
 import { GoalPanel } from '../goalPanel/GoalPanel'
 import { HintsPanel } from './HintsPanel'
+import { leaveLevel } from '../../../app/startLevel'
+import { exportSnapshot } from '../../../persistence/snapshot'
 import { CommandBuilder } from '../terminal/CommandBuilder'
 import { Terminal } from '../terminal/Terminal'
 import { useFileTree } from '../fileTree/useFileTree'
@@ -109,7 +111,32 @@ export function LevelScreen() {
   const handleExecuted = useCallback((ok: boolean) => {
     setVersion((value) => value + 1)
     if (!ok) setFailures((value) => value + 1)
+    // M5a：每条命令执行后把仓库状态固化进快照。
+    // ⚠️ 不这样做的话，玩家「敲完命令立刻刷新」会丢掉最后几步（快照还是进关时的初始态）。
+    // 这里不 await（命令回显不该被一次落盘阻塞）；exportSnapshot 失败仅影响本次刷新的
+    // 恢复点新旧，不影响游戏进行。levelId 取 store 快照，避免闭包过期。
+    const currentLevelId = useSessionStore.getState().level?.id
+    if (currentLevelId !== undefined) {
+      void exportSnapshot(currentLevelId).catch(() => {})
+    }
   }, [])
+
+  /**
+   * 返回菜单 / 返回章节（M5a）。
+   *
+   * ⚠️ 必须走 `leaveLevel()` 而不是直接 `goMenu()`：玩家主动退出关卡时，
+   * 挂起标记（`gtp:active-level:v1`）与本关快照都要清掉 ——
+   * 否则刷新浏览器会把他「恢复」回一个已经放弃的关卡。
+   */
+  const handleQuit = useCallback(
+    (to: 'menu' | 'chapter') => {
+      void leaveLevel().finally(() => {
+        if (to === 'menu') goMenu()
+        else if (level !== null) goChapter(level.chapter)
+      })
+    },
+    [goMenu, goChapter, level],
+  )
 
   // 过关判定：全部 targets 满足 → 切 levelComplete（§9.1；结算在 LevelComplete 做）
   useEffect(() => {
@@ -187,13 +214,13 @@ export function LevelScreen() {
             <button
               className={styles.quit}
               type="button"
-              onClick={() => goChapter(level.chapter)}
+              onClick={() => handleQuit('chapter')}
               aria-label="返回章节关卡列表"
             >
               返回章节
             </button>
           )}
-          <button className={styles.quit} type="button" onClick={goMenu}>
+          <button className={styles.quit} type="button" onClick={() => handleQuit('menu')}>
             返回菜单
           </button>
         </div>

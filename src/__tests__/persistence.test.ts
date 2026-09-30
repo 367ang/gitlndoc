@@ -24,8 +24,19 @@ import {
   saveProgress,
   saveSettings,
 } from '../persistence/progress'
+import {
+  ACTIVE_LEVEL_KEY,
+  clearActiveLevel,
+  clearSnapshot,
+  exportSnapshot,
+  hasSnapshot,
+  importSnapshot,
+  loadActiveLevel,
+  saveActiveLevel,
+} from '../persistence/snapshot'
+import { hasSavedProgress, resumeInterruptedLevel } from '../persistence/boot'
 import { useProgressStore } from '../store/progressStore'
-import { snapshotDbName, SNAPSHOT_DB_PREFIX } from '../persistence/snapshot'
+import { useSessionStore } from '../store/sessionStore'
 
 /** 直接往 storage 里塞原始字符串（模拟被手改 / 旧版本写坏的数据） */
 function putRaw(key: string, value: string): void {
@@ -254,15 +265,173 @@ describe('persistence/progress —— 与 progressStore 的接线', () => {
   })
 })
 
-describe('persistence/snapshot —— 数据库命名约定', () => {
-  it('库名符合 §10 的 gtp:snapshot:<levelId> 约定', () => {
-    expect(SNAPSHOT_DB_PREFIX).toBe('gtp:snapshot:')
-    expect(snapshotDbName('ch5-1')).toBe('gtp:snapshot:ch5-1')
-    expect(snapshotDbName('ch1-4')).toBe('gtp:snapshot:ch1-4')
+describe('persistence/snapshot —— 存储命名约定', () => {
+  it('快照库与对象仓库的键符合 §10 的 gtp: 前缀体系', async () => {
+    const { SNAPSHOT_DB_NAME, SNAPSHOT_STORE } = await import('../persistence/snapshot')
+    expect(SNAPSHOT_DB_NAME).toBe('gtp:snapshots:v1')
+    expect(SNAPSHOT_STORE).toBe('snapshots')
+  })
+})
+
+// ── M5a：刷新恢复（「自动恢复关卡中途进度」，用户裁定的产品口径）──────────
+
+describe('persistence/snapshot —— 挂起关卡记录（刷新恢复的依据）', () => {
+  it('写入后能读回', () => {
+    saveActiveLevel('ch5-1')
+    expect(loadActiveLevel()).toEqual({ levelId: 'ch5-1' })
   })
 
-  it('不同关卡的库名互不相同（快照按关隔离）', () => {
-    const names = new Set(['ch1-1', 'ch1-2', 'ch5-6'].map(snapshotDbName))
-    expect(names.size).toBe(3)
+  it('未记录时返回 null', () => {
+    expect(loadActiveLevel()).toBeNull()
+  })
+
+  it('clearActiveLevel 之后读回 null', () => {
+    saveActiveLevel('ch5-2')
+    clearActiveLevel()
+    expect(loadActiveLevel()).toBeNull()
+  })
+
+  it('数据损坏时返回 null 而不是抛异常（boot 会据此退回菜单）', () => {
+    for (const raw of ['{不是 JSON', '[]', '"文本"', 'null', '42']) {
+      localStorage.setItem(ACTIVE_LEVEL_KEY, raw)
+      expect(() => loadActiveLevel()).not.toThrow()
+      expect(loadActiveLevel()).toBeNull()
+    }
+  })
+
+  it('levelId 缺失或为空 → null', () => {
+    localStorage.setItem(ACTIVE_LEVEL_KEY, JSON.stringify({}))
+    expect(loadActiveLevel()).toBeNull()
+    localStorage.setItem(ACTIVE_LEVEL_KEY, JSON.stringify({ levelId: '' }))
+    expect(loadActiveLevel()).toBeNull()
+  })
+})
+
+describe('persistence/snapshot —— 显式导出/导入（仓库快照的唯一事实来源）', () => {
+  it('导出后 hasSnapshot 为 true，importSnapshot 能把虚拟根原样写回', async () => {
+    const { reset } = await import('../engine/sandbox')
+    const { fsp } = await import('../engine/fs')
+
+    // 造一个有文件、有目录、有子目录内容的仓库（等价于进关预置后的状态）
+    const r = await reset({ files: { 'notes/a.md': 'AAA', 'b.txt': 'B' } })
+    expect(r.ok).toBe(true)
+
+    await exportSnapshot('chX-1')
+    expect(await hasSnapshot('chX-1')).toBe(true)
+
+    // 破坏现场（模拟刷新后的空环境），再导入
+    const r2 = await reset({})
+    expect(r2.ok).toBe(true)
+    const restored = await importSnapshot('chX-1')
+    expect(restored).toBe(true)
+
+    // 内容原样回来了（含二进制安全的 .git 内部结构 —— 用文本文件验证读写通路）
+    expect(await fsp.readFile('/repo/notes/a.md', 'utf8')).toBe('AAA')
+    expect(await fsp.readFile('/repo/b.txt', 'utf8')).toBe('B')
+    // .git 目录也被完整导出/导入（目录条目本身在快照里）
+    const stat = await fsp.stat('/repo/.git')
+    expect(stat.isDirectory()).toBe(true)
+    // 清理，避免影响其它用例
+    await clearSnapshot('chX-1')
+  })
+
+  it('未导出的关卡 hasSnapshot 为 false，importSnapshot 返回 false（恢复降级的依据）', async () => {
+    expect(await hasSnapshot('chX-never')).toBe(false)
+    expect(await importSnapshot('chX-never')).toBe(false)
+  })
+
+  it('clearSnapshot 后不可再恢复', async () => {
+    const { reset } = await import('../engine/sandbox')
+    await reset({ files: { 'x.md': 'X' } })
+    await exportSnapshot('chX-2')
+    expect(await hasSnapshot('chX-2')).toBe(true)
+    await clearSnapshot('chX-2')
+    expect(await hasSnapshot('chX-2')).toBe(false)
+    expect(await importSnapshot('chX-2')).toBe(false)
+  })
+
+  it('空仓库（虚拟根只有 .git 前身之前的空态）导出后同样可恢复', async () => {
+    // ⚠️ 1-1 这类关卡开局是空目录：快照里必须有「目录条目」而不只是文件，
+    //    否则恢复时 /repo 整个建不出来（目录条目与文件条目同等重要）。
+    const { reset } = await import('../engine/sandbox')
+    const { fsp } = await import('../engine/fs')
+    await reset({ template: 'emptyRepo' })
+    await exportSnapshot('chX-3')
+    expect(await hasSnapshot('chX-3')).toBe(true)
+    await reset({})
+    expect(await importSnapshot('chX-3')).toBe(true)
+    // /repo 与 /remote.git 两个目录条目回来了
+    expect((await fsp.stat('/repo')).isDirectory()).toBe(true)
+    expect((await fsp.stat('/remote.git')).isDirectory()).toBe(true)
+    await clearSnapshot('chX-3')
+  })
+
+  it('恢复保真：二进制内容（.git 的对象文件）不因编码损坏', async () => {
+    const { reset } = await import('../engine/sandbox')
+    const { fsp } = await import('../engine/fs')
+    // 写一段含高位字节的「伪二进制」内容
+    await reset({ files: { 'bin.dat': String.fromCharCode(0x00, 0xff, 0x80, 0x7f) } })
+    const original = await fsp.readFile('/repo/bin.dat')
+    await exportSnapshot('chX-4')
+    await reset({})
+    await importSnapshot('chX-4')
+    const restored = await fsp.readFile('/repo/bin.dat')
+    expect(restored.length).toBe(original.length)
+    expect(Array.from(restored)).toEqual(Array.from(original))
+    await clearSnapshot('chX-4')
+  })
+})
+
+describe('persistence/boot —— 恢复流程的降级行为', () => {
+  it('无挂起关卡时不恢复（reason: none）', async () => {
+    clearActiveLevel()
+    const outcome = await resumeInterruptedLevel()
+    expect(outcome).toEqual({ resumed: false, reason: 'none' })
+  })
+
+  it('挂起的关卡 id 已不存在时不恢复（reason: unknown-level）', async () => {
+    saveActiveLevel('ch9-9')
+    const outcome = await resumeInterruptedLevel()
+    expect(outcome.resumed).toBe(false)
+    if (!outcome.resumed) expect(outcome.reason).toBe('unknown-level')
+  })
+
+  it('关卡存在但无快照库时不恢复（reason: failed），且不破坏会话', async () => {
+    saveActiveLevel('ch5-1')
+    useSessionStore.setState({ level: null, history: [] })
+    const outcome = await resumeInterruptedLevel()
+    expect(outcome.resumed).toBe(false)
+    if (!outcome.resumed) expect(outcome.reason).toBe('failed')
+    // 关键：恢复失败不得把玩家留在半吊子状态
+    expect(useSessionStore.getState().level).toBeNull()
+  })
+})
+
+describe('persistence/boot —— boot 分流判据', () => {
+  it('无进度 → hasSavedProgress 为 false（进 intro）', () => {
+    expect(hasSavedProgress()).toBe(false)
+  })
+
+  it('有通关记录 → true（进 menu）', () => {
+    useProgressStore.getState().setLevelRecord('ch1-1', { score: 100, stars: 3, cleared: true })
+    expect(hasSavedProgress()).toBe(true)
+  })
+
+  it('storage 抛错时降级为 false 而不是让 boot 中断', () => {
+    const original = (globalThis as { localStorage?: Storage }).localStorage
+    Object.defineProperty(globalThis, 'localStorage', {
+      value: {
+        getItem() {
+          throw new Error('SecurityError')
+        },
+      } as unknown as Storage,
+      configurable: true,
+    })
+    try {
+      expect(() => hasSavedProgress()).not.toThrow()
+      expect(hasSavedProgress()).toBe(false)
+    } finally {
+      Object.defineProperty(globalThis, 'localStorage', { value: original, configurable: true })
+    }
   })
 })

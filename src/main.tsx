@@ -28,7 +28,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './app/App'
 import { reset } from './engine/sandbox'
-import { hydrateProgress } from './persistence/boot'
+import { hydrateProgress, resumeInterruptedLevel } from './persistence/boot'
 import './styles/tokens.css'
 import './styles/global.css'
 
@@ -45,14 +45,38 @@ async function bootstrap(): Promise<void> {
   //    本函数自身容错（storage 不可用 / 数据损坏都返回空进度），不抛异常。
   hydrateProgress()
 
-  // 2) 沙箱可能因浏览器无 indexedDB 等原因初始化失败；此处不抛，
-  //    转成 bootError 交由 App 呈现，保证页面永远有内容。
+  // 2) 刷新恢复（M5a，用户裁定的产品口径「自动恢复关卡中途进度」）：
+  //    若上次离开时正在某关内，则把沙箱挂到该关的快照库上并直接回到那一关。
+  //    ⚠️ 恢复分支**不能**再跑下面的 `reset()` —— 那会清空虚拟根、
+  //    把刚要恢复的仓库抹掉。两条路径互斥，故用 `resumed` 标记分流。
+  //
+  //    ⚠️ 顺带说明一处未来会变的行为：M5a 之前每次 boot 都 `reset({ template: 'emptyRepo' })`，
+  //    即「启动即得到一个空仓库」；现在正常启动（无挂起关卡）时**仍需**它 ——
+  //    后续流程是「进菜单 → 玩家点进某关」，进关时会由 `startLevel()` 再 reset 一次。
+  //    这里的 boot reset 只是保证「任何时刻沙箱都处于已初始化的可用状态」。
   let bootError: string | null = null
+  let resumed = false
   try {
-    const result = await reset({ template: 'emptyRepo' })
-    if (!result.ok) bootError = result.error.toString()
+    const outcome = await resumeInterruptedLevel()
+    resumed = outcome.resumed
+    if (!outcome.resumed && outcome.reason !== 'none') {
+      // 恢复失败不是致命错误：退回菜单即可，但要留下线索便于排查
+      console.warn(`[boot] 未能恢复挂起关卡（${outcome.reason}），改从菜单开始。`)
+    }
   } catch (error) {
-    bootError = error instanceof Error ? error.message : String(error)
+    // 恢复流程绝不允许阻断 boot
+    console.warn('[boot] 恢复挂起关卡时异常：', error)
+  }
+
+  // 3) 未恢复时才初始化空沙箱；沙箱可能因浏览器无 indexedDB 等原因失败；
+  //    此处不抛，转成 bootError 交由 App 呈现，保证页面永远有内容。
+  if (!resumed) {
+    try {
+      const result = await reset({ template: 'emptyRepo' })
+      if (!result.ok) bootError = result.error.toString()
+    } catch (error) {
+      bootError = error instanceof Error ? error.message : String(error)
+    }
   }
 
   createRoot(mountPoint()).render(

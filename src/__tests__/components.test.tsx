@@ -774,7 +774,9 @@ describe('components —— 导航出口', () => {
 
     fireEvent.click(screen.getByLabelText('返回章节关卡列表'))
 
-    expect(useViewStore.getState().view).toBe('chapter')
+    // ⚠️ M5a：出口改为经 `leaveLevel()`（清理挂起标记与快照）后再切视图，
+    //    故是异步的 —— 必须 waitFor，不能同步断言（实测会读到旧视图）。
+    await waitFor(() => expect(useViewStore.getState().view).toBe('chapter'))
     // goChapter 的既有契约：视图指向被返回的章节
     expect(useViewStore.getState().chapterId).toBe('ch1')
   })
@@ -790,7 +792,8 @@ describe('components —— 导航出口', () => {
     expect(screen.getByLabelText('返回章节关卡列表')).toBeTruthy()
     fireEvent.click(screen.getByText('返回菜单'))
 
-    expect(useViewStore.getState().view).toBe('menu')
+    // ⚠️ M5a：同「返回章节」——出口经 `leaveLevel()` 异步清理后再切视图
+    await waitFor(() => expect(useViewStore.getState().view).toBe('menu'))
     expect(useViewStore.getState().chapterId).toBeNull()
   })
 })
