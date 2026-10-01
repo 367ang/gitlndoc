@@ -49,7 +49,63 @@ export interface LevelInit {
   commits?: InitCommit[] // 预置提交（author/date/msg/message）
   branches?: { name: string; from: string }[] // 预置分支
   tags?: { name: string; at: string }[]
-  remotes?: { name: string; url: string }[]
+  /**
+   * 预置**远程宇宙**（M5b，服务第四章「星际连接」）。
+   *
+   * 与其他字段的关键差别：这里描述的不是 `/repo`，而是沙箱里的裸仓库
+   * `/remote.git`（见 `fs.ts` 的目录约定、`engine/fileRemote.ts` 的实现）。
+   *
+   * 语义：
+   *   - `name` / `url`：与真 git 的 `git remote add` 一致。URL 受白名单约束
+   *     （`gitApi.ALLOWED_REMOTE_URL`），关卡数据应统一写沙箱地址。
+   *   - `branches`：远程已有的分支，值为**该分支指向的预置提交信息**（`InitCommit.msg`）。
+   *     初始化时按这些信息在 `/repo` 的预置历史里定位到对应提交，再整体搬进裸仓
+   *     （走真实的 `packObjects` + `indexPack`，产出真对象库）。
+   *
+   * ⚠️ 为什么用 **提交信息** 而不是索引（如 `{ branch, atCommit: 2 }`）来引用：
+   *   1. 与引擎既有的引用风格一致 —— `branches[].from` 用分支名、`tags[].at` 用
+   *      提交引用，都是「语义名」而非「位置序号」；序号会在关卡作者调整预置提交
+   *      顺序时静默错位；
+   *   2. 提交信息是关卡数据里**唯一稳定且可读**的坐标 —— 作者写下
+   *      `{ branch: 'main', at: '远程基线' }` 时，一眼能看出它指向哪条提交；
+   *   3. 找不到时可在初始化期 fail-fast 报错（见 `sandbox.seedRemote`），
+   *      而不是安静地生成一个空远程分支。
+   *
+   * ⚠️ 为什么 `template: 'cloneSource'` 不再单独列在别处：它表达的是
+   *   「玩家进关时面对的是一个**尚未克隆**的空仓库，要从远程克隆下来」。
+   *   与 `remotes` 的差别在于**预置与否**：
+   *     - `template: 'cloneSource'` → `/repo` 保持空仓库，玩家自己 `git clone`；
+   *     - 仅有 `remotes`（不带该 template）→ `/repo` 正常预置，玩家只需
+   *       `git remote add` + `push` / `fetch`。
+   *
+   * @example 4-3「接收数据」：远程领先本地，玩家要 fetch 下来
+   * ```ts
+   * remotes: [{ name: 'origin', url: ALLOWED_REMOTE_URL,
+   *             branches: [{ branch: 'main', at: '远程基线' }] }]
+   * ```
+   */
+  remotes?: {
+    name: string
+    url: string
+    /** 远程已有的分支：分支名 → 指向的预置提交信息（`InitCommit.msg` 的逐字值） */
+    branches?: { branch: string; at: string }[]
+    /**
+     * 是否把该远程**同时**写进本地的 `remote.<name>.url` 配置（缺省 `true`）。
+     *
+     * ⚠️ 为什么需要这个开关（M5b 实测逼出来的字段）：
+     *   `remotes` 承担两件事 ——（a）预置远程宇宙的内容，（b）让本地「已经关联」了它。
+     *   大多数关卡两者都要（4-2 要能直接 push、4-3 要能直接 fetch）。
+     *   但 **4-1「建立航道」恰恰是要考 `git remote add`** —— 若预置时就写了配置，
+     *   该关的 `remote` 目标会**开局即达标**（`levels.test.ts` 的通用断言抓到），
+     *   玩家一条命令不敲就过关。
+     *
+     *   故此处显式区分：「预置远程内容」与「本地已关联」是**两件事**，
+     *   由关卡作者分别声明，而不是让一个字段默默兼做两用。
+     *
+     * `false` 的用法仅限「本关要考 remote add」的场景（当前只有 4-1）。
+     */
+    linkLocal?: boolean
+  }[]
   /**
    * 预置「工作区被搞乱」的状态（M5a，服务第五章「时空回溯」）。
    *

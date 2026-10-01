@@ -95,8 +95,10 @@ function fragment(command: string, slot: number, text: string, label: string): F
  */
 const COMMON_GIT_SLOT: Fragment[] = [
   // slot 0：起始词。各命令组共享同一文本，但在 Draft 里是各自独立的片段对象。
-  // ⚠️ 必须覆盖 ch1~ch3 全部命令组 —— draftFromSkeleton 靠「slot0 + slot1 同命令」
-  // 锁定命令组；缺组的 slot0 会让该命令的骨架预填失败（实测：merge/rebase 等）。
+  // ⚠️ 必须覆盖**该章片段表里出现的每一个命令组** —— draftFromSkeleton 靠
+  // 「slot0 + slot1 同命令」锁定命令组；缺组的 slot0 会让该命令的骨架预填失败
+  // （实测踩过两次：M4 的 merge/rebase、M5b 的 remote/clone/push/fetch/pull）。
+  // 新增章节片段表时，此处要同步补上该章所有命令组的 slot0。
   fragment('git init', 0, 'git', 'git'),
   fragment('git add', 0, 'git', 'git'),
   fragment('git commit', 0, 'git', 'git'),
@@ -109,6 +111,12 @@ const COMMON_GIT_SLOT: Fragment[] = [
   fragment('git switch', 0, 'git', 'git'),
   fragment('git merge', 0, 'git', 'git'),
   fragment('git rebase', 0, 'git', 'git'),
+  // M5b：第四章「星际连接」的五个命令组
+  fragment('git remote', 0, 'git', 'git'),
+  fragment('git clone', 0, 'git', 'git'),
+  fragment('git push', 0, 'git', 'git'),
+  fragment('git fetch', 0, 'git', 'git'),
+  fragment('git pull', 0, 'git', 'git'),
 ]
 
 const FIRST_CHAPTER: Fragment[] = [
@@ -163,6 +171,36 @@ const THIRD_CHAPTER: Fragment[] = [
   fragment('git commit', 2, '-m', '-m'),
 ]
 
+/**
+ * 第四章片段表（M5b）：remote / clone / push / fetch / pull，**外加 merge**。
+ *
+ * ⚠️ 没有这张表时 `fragmentsForLevel` 会回落到 `FIRST_CHAPTER`（init/add/commit/status），
+ *    于是第四章的半拼骨架 `git remote` **在片段池里找不到对应片段** ——
+ *    预填草稿为空、执行按钮恒灰，玩家根本拼不出命令（真实浏览器实测发现）。
+ *    它与 executor 的白名单必须同步扩展：**命令能执行 ≠ 玩家能拼出来**。
+ *
+ * ⚠️ `merge` 属第三章的教学命令，但 4-5「协作冲突」的剧本正是
+ *    「fetch → merge → push」（笔记 `git-remotes.md` 的「推送被拒绝」小节原样如此），
+ *    故本章片段表**必须**含它 —— 否则玩家在这一关拼不出合流那一步（实测踩到）。
+ */
+const FOURTH_CHAPTER: Fragment[] = [
+  ...COMMON_GIT_SLOT,
+  fragment('git remote', 1, 'remote', 'remote'),
+  fragment('git clone', 1, 'clone', 'clone'),
+  fragment('git push', 1, 'push', 'push'),
+  fragment('git fetch', 1, 'fetch', 'fetch'),
+  fragment('git pull', 1, 'pull', 'pull'),
+  fragment('git merge', 1, 'merge', 'merge'),
+  fragment('git add', 1, 'add', 'add'),
+  fragment('git commit', 1, 'commit', 'commit'),
+  fragment('git status', 1, 'status', 'status'),
+  fragment('git remote', 2, 'add', 'add remote'),
+  fragment('git remote', 2, 'remove', 'remove remote'),
+  fragment('git remote', 2, '-v', '-v'),
+  fragment('git add', 2, '.', '.'),
+  fragment('git commit', 2, '-m', '-m'),
+]
+
 /** 通用片段（按章节选表前的默认清单；ch1 专用内容） */
 export const COMMON_FRAGMENTS: Fragment[] = FIRST_CHAPTER
 
@@ -171,6 +209,7 @@ const FRAGMENTS_BY_CHAPTER: Partial<Record<Level['chapter'], Fragment[]>> = {
   ch1: FIRST_CHAPTER,
   ch2: SECOND_CHAPTER,
   ch3: THIRD_CHAPTER,
+  ch4: FOURTH_CHAPTER,
 }
 
 /**

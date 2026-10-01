@@ -5,15 +5,16 @@
  * 不含任何判定/计分逻辑（那些在 `game/validate/` 与 M3 的 `game/scoring/`）。
  * UI 只经此处取关卡，不直接 import 具体章节文件 —— 这样新增章节时 UI 无需改动。
  *
- * ⚠️ 当前注册了 ch1~ch3（M4）与 **ch5（M5a）**。ch4 与 ch6、综合挑战 F 尚未落地，
- * **不注册**，`getChapterLevels('ch4')` 会如实返回空数组 —— 不伪造占位关卡（§14）。
- * （ch4 远程属 M5b，ch6 标签属 M6。）
+ * ⚠️ 当前注册了 **ch1~ch5**（M4 的 1~3 章 + M5a 的第 5 章 + **M5b 的第 4 章**）。
+ * ch6 与综合挑战 F 尚未落地，**不注册**，`getChapterLevels('ch6')` 会如实返回空数组
+ * —— 不伪造占位关卡（§14）。（ch6 标签属 M6。）
  */
 
 import type { ChapterId, Level } from '../../game/types';
 import { CHAPTER_1_LEVELS } from './ch1';
 import { CHAPTER_2_LEVELS } from './ch2';
 import { CHAPTER_3_LEVELS } from './ch3';
+import { CHAPTER_4_LEVELS } from './ch4';
 import { CHAPTER_5_LEVELS } from './ch5';
 
 /** 章节元信息，供菜单/章节页渲染（§9.1） */
@@ -65,7 +66,7 @@ export const CHAPTERS: readonly ChapterMeta[] = [
     order: 4,
     title: '星际连接',
     subtitle: 'Git 远程操作 —— remote / push / fetch / pull',
-    playable: false,
+    playable: true,
   },
   {
     id: 'ch5',
@@ -95,7 +96,7 @@ const LEVELS_BY_CHAPTER: Record<ChapterId, readonly Level[]> = {
   ch1: CHAPTER_1_LEVELS,
   ch2: CHAPTER_2_LEVELS,
   ch3: CHAPTER_3_LEVELS,
-  ch4: [],
+  ch4: CHAPTER_4_LEVELS,
   ch5: CHAPTER_5_LEVELS,
   ch6: [],
   F: [],

@@ -18,6 +18,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import * as LightningFsNS from '@isomorphic-git/lightning-fs'
 import { configureFs, fsp, type FsIdb } from '../engine/fs'
+import * as gitApi from '../engine/gitApi'
 import { reset } from '../engine/sandbox'
 import { execute } from '../game/command/executor'
 import { evaluateTargets, isLevelComplete, readTargetContext } from '../game/validate/targetState'
@@ -330,18 +331,15 @@ describe('targetState —— 提交历史（commitCount / commitMessage / commit
 })
 
 describe('targetState —— 尚未实现的类型（§14 明确报「尚未实现」而非静默通过）', () => {
-  it('tag / remote 一律 ok:false 且 implemented:false（M4 起其余 9 种已转正）', async () => {
+  it('tag 一律 ok:false 且 implemented:false（M5b 起 remote 已转正）', async () => {
     await freshSandbox()
 
-    const unimplemented: TargetCondition[] = [
-      { type: 'tag', name: 'v1.0', exists: true },
-      { type: 'remote', name: 'origin', hasRemote: true },
-    ]
+    const unimplemented: TargetCondition[] = [{ type: 'tag', name: 'v1.0', exists: true }]
 
     const state = await evaluateTargets(unimplemented)
 
     expect(state.satisfied).toBe(false)
-    expect(state.remaining).toBe(2)
+    expect(state.remaining).toBe(1)
     for (const [index, result] of state.results.entries()) {
       // 即便条件本身「看起来该成立」，也不能静默通过
       expect(result.implemented).toBe(false)
@@ -364,6 +362,53 @@ describe('targetState —— 尚未实现的类型（§14 明确报「尚未实�
     expect(state.results[1].ok).toBe(false)
     expect(state.satisfied).toBe(false)
     expect(state.remaining).toBe(1)
+  })
+})
+
+describe('targetState —— remote 目标（M5b，第四章「星际连接」）', () => {
+  beforeEach(async () => {
+    await freshSandbox()
+  })
+
+  it('未关联远程时 hasRemote:true 不成立，关联后成立', async () => {
+    // 开局：没有任何远程
+    const before = await evaluateTargets([{ type: 'remote', name: 'origin', hasRemote: true }])
+    expect(before.results[0].implemented).toBe(true)
+    expect(before.results[0].ok).toBe(false)
+    expect(before.satisfied).toBe(false)
+
+    // `git remote add origin <沙箱地址>` 之后
+    const added = await gitApi.addRemote('origin', gitApi.ALLOWED_REMOTE_URL)
+    expect(added.ok).toBe(true)
+
+    const after = await evaluateTargets([{ type: 'remote', name: 'origin', hasRemote: true }])
+    expect(after.results[0].ok).toBe(true)
+    expect(after.satisfied).toBe(true)
+  })
+
+  it('hasRemote:false 表达「关联已被移除」', async () => {
+    await gitApi.addRemote('origin', gitApi.ALLOWED_REMOTE_URL)
+
+    const stillThere = await evaluateTargets([{ type: 'remote', name: 'origin', hasRemote: false }])
+    expect(stillThere.results[0].ok).toBe(false)
+
+    const removed = await gitApi.deleteRemote('origin')
+    expect(removed.ok).toBe(true)
+
+    const afterRemoval = await evaluateTargets([{ type: 'remote', name: 'origin', hasRemote: false }])
+    expect(afterRemoval.results[0].ok).toBe(true)
+    expect(afterRemoval.satisfied).toBe(true)
+  })
+
+  it('远程名区分大小写（与真 git 的配置键语义一致）', async () => {
+    await gitApi.addRemote('origin', gitApi.ALLOWED_REMOTE_URL)
+
+    // `Origin` 与 `origin` 是两个不同的 remote —— 不应被宽容匹配
+    const wrongCase = await evaluateTargets([{ type: 'remote', name: 'Origin', hasRemote: true }])
+    expect(wrongCase.results[0].ok).toBe(false)
+
+    const rightCase = await evaluateTargets([{ type: 'remote', name: 'origin', hasRemote: true }])
+    expect(rightCase.results[0].ok).toBe(true)
   })
 })
 

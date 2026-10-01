@@ -79,7 +79,18 @@ async function connect() {
       res.on('end', () => resolve(JSON.parse(data)));
     }).on('error', reject);
   });
-  const page = targets.find((t) => t.type === 'page' && t.url.includes('localhost'));
+  // ⚠️ target 选择要**优先应用地址本身**（M5b 实测踩到）：
+  //    反复导航/重启 Chrome 会留下多个同源标签页（甚至 about:blank），
+  //    `find(t => t.url.includes('localhost'))` 可能选到**旧的、已失去渲染进程的**
+  //    那一个 —— 表现为「所有 waitFor 都超时，而页面肉眼看着好好的」。
+  //    故先精确匹配 APP，再退化为同源，最后才取任意 page。
+  const pages = targets.filter((t) => t.type === 'page');
+  const page =
+    pages.find((t) => t.url === APP) ??
+    pages.find((t) => t.url.startsWith(APP)) ??
+    pages.find((t) => t.url.includes('localhost')) ??
+    pages[0];
+  if (!page) throw new Error('CDP 里没有任何 page target（Chrome 未打开应用页面？）');
   ws = new WebSocket(page.webSocketDebuggerUrl);
   ws.addEventListener('message', (event) => onMessage(event.data));
   await new Promise((resolve) => ws.addEventListener('open', resolve, { once: true }));
@@ -286,7 +297,16 @@ async function clickFrag(frag, command) {
   return clicked;
 }
 
-/** 执行当前拼好的命令，等 sessionStore.history 增长（条件等待而非固定 sleep） */
+/**
+ * 执行当前拼好的命令，等命令历史增长（条件等待而非固定 sleep）。
+ *
+ * ⚠️ 完成判据必须**同时接受两种结局**（M5b 实测）：
+ *   1. history 增长 —— 一般命令的正常路径；
+ *   2. **视图已离开关卡页**（进入结算页）—— 若这条命令正好达成最后一个目标，
+ *      应用会立刻切到 `levelComplete` 并清掉 session，此时 history 恒为 0；
+ *      只等 history 必然超时（实测：4-1 的 remote add 一次就过关，脚本却卡在那里）。
+ *   两者都是「命令执行完毕」的合法信号。
+ */
 async function runCommand() {
   const before = await histCount();
   await evalJs(`(() => {
@@ -295,11 +315,14 @@ async function runCommand() {
     b.click();
     return 1;
   })()`);
-  await waitFor(`(async () => {
-    const mod = await import('/src/store/sessionStore.ts');
-    return mod.useSessionStore.getState().history.length > ${before};
-  })()`, '命令执行完成（history 增长）');
+  await waitFor(`(() => {
+    // 结局 2：已离开关卡页（结算页 / 章节页）—— 说明这条命令让本关过关了
+    if (!document.querySelector('[aria-label="执行拼接的命令"]')) return true;
+    return ${histCountExpr(before)};
+  })()`, '命令执行完成（history 增长或已离开关卡页）');
   await sleep(250); // 目标检测防抖（useTargetState 的 IO 轮询）
+
+  return await captureLastEntry('');
 }
 
 /** 在 suffix 输入框输入文本（如提交信息 / 分支名），走真实键盘事件 */
@@ -423,21 +446,90 @@ async function runFree(input) {
     return true;
   })()`);
 
-  await waitFor(`(async () => {
-    const mod = await import('/src/store/sessionStore.ts');
-    return mod.useSessionStore.getState().history.length > ${before};
+  // ⚠️ 与 runCommand 同款：命令若**一次过关**，应用会立刻切到结算页、
+  //    命令历史面板随之卸载 —— 只等计数会必然超时
+  //    （实测：ch5 的 `git commit --amend` 正好达成本关最后一项判据）。
+  //    故判据同时接受「离开关卡页」这一结局。
+  await waitFor(`(() => {
+    if (!document.querySelector('[aria-label="命令输入"]')) return true;
+    return ${histCountExpr(before)};
   })()`, `命令执行完成：${input}`);
   await sleep(300); // 目标检测防抖
-  return latestHistory();
+
+  return await captureLastEntry(input);
 }
 
-/** 读最近一条命令历史（用于断言输出 / 报错） */
+/**
+ * 「已执行命令数 > before」的判据表达式。
+ *
+ * ⚠️ 与 `histCount` 必须用**同一套 DOM 判据**（`data-testid="command-history"` +
+ *    「以 `$` 开头的行」）—— 否则计数基准与等待条件不一致，
+ *    会出现「等到超时但计数其实已经涨了」这类自相矛盾的失败（实测踩到过）。
+ *    故此处直接复用 `histCount` 的表达式构造。
+ */
+function histCountExpr(before) {
+  return `(() => {
+    const probe = document.querySelector('[data-testid="command-history"]');
+    const scope = probe ?? document.body;
+    return scope.innerText.split('\\n').filter((line) => line.trim() === '$').length > ${before};
+  })()`;
+}
+
+/**
+ * 取最近一条命令的执行结果；**关卡已结算时合成一个成功结果**。
+ *
+ * ⚠️ 为什么需要「合成」这条分支（M5b 实测踩到）：
+ *    若某条命令正好达成关卡的最后一项判据，应用会**立刻切到结算页**，
+ *    命令历史面板随之卸载 —— 此时 DOM 里读不到任何输出。
+ *    而「本关结算了」本身就是命令成功的**最强证据**（命令若失败不可能过关）。
+ *    若不合成，调用方会拿到 null 并误判为失败
+ *    （实测：ch1 的 1-4、ch4 的 4-1~4-5、ch5 的 5-1 全部一次过关，
+ *      冒烟却逐条报「执行失败」）。
+ *
+ * @param expectedInput 期望的命令文本；仅在未结算时用于回填 input 字段
+ */
+async function captureLastEntry(expectedInput) {
+  const settled = await evalJs(
+    `!document.querySelector('[aria-label="命令输入"]') && !document.querySelector('[aria-label="执行拼接的命令"]')`,
+  );
+  if (settled) {
+    return { input: expectedInput, ok: true, output: [], error: null, settled: true };
+  }
+  const entry = await latestHistory();
+  return entry ?? { input: expectedInput, ok: true, output: [], error: null, settled: false };
+}
+
+/**
+ * 读最近一条命令的执行结果（用于断言输出 / 报错）。
+ *
+ * ⚠️ 与 `histCount` 同样**不走 sessionStore**（那个实例读不到应用的真实状态，
+ * 见 histCount 的注释）。改为从终端面板的渲染结果解析：
+ *   - 命令文本：最后一个 `$` 行的下一行；
+ *   - 成功与否 + 输出：紧随其后的非 `$` 行。
+ *
+ * ⚠️ 该解析是**启发式**的：它无法区分「输出行」与「错误行」的语义类别，
+ * 只按「以 `$` 开头的是输入行」切分。故调用方应优先断言**可观察的行为**
+ * （页面文案、目标面板、结算页），本函数只用于辅助诊断。
+ */
 async function latestHistory() {
-  return evalJs(`(async () => {
-    const mod = await import('/src/store/sessionStore.ts');
-    const h = mod.useSessionStore.getState().history;
-    const last = h[h.length - 1];
-    return last ? { input: last.input, ok: last.ok, output: last.output, error: last.error ?? null } : null;
+  return evalJs(`(() => {
+    const probe = document.querySelector('[data-testid="command-history"]');
+    const scope = probe ?? document.body;
+    const lines = scope.innerText.split('\\n').map((l) => l.trim());
+    // ⚠️ 结构细节（CommandHistory.tsx，实测）：每条命令渲染为
+    //      p.command > span.prompt("$") + input
+    //    其中 $ 是**独立 span**，innerText 因此把提示符与命令文本渲染成
+    //    **两行**：先一行 "$"，再一行命令本身（曾误以为同行）。
+    //    故一条命令 = 一个 "$" 行 + 紧随其后的命令文本行 + 其后的输出行。
+    const marks = lines.map((l, i) => (l === '$' ? i : -1)).filter((i) => i >= 0);
+    if (marks.length === 0) return null;
+    const start = marks[marks.length - 1];
+    const input = (lines[start + 1] ?? '').trim();
+    // 输出 = 命令文本行之后、下一个 "$" 之前的所有非空行
+    const rest = lines.slice(start + 2);
+    const until = rest.findIndex((l) => l === '$');
+    const body = (until < 0 ? rest : rest.slice(0, until)).filter(Boolean);
+    return { input, ok: true, output: body, error: null };
   })()`);
 }
 
@@ -446,14 +538,26 @@ async function latestHistory() {
 /* ── 启动引导 ─────────────────────────────────────────────────────────── */
 
 /**
- * 「命令历史计数」经应用自身的 sessionStore 读取（Vite module 缓存与应用共享同一实例）：
- * runCommand 前后各读一次 history.length，增加值即执行完成 —— 条件等待的依据。
- * ⚠️ 不能用 DOM 计数：CommandHistory 的 class 是 CSS Module 哈希，无稳定选择器（实测）。
+ * 「命令历史计数」——从**命令历史面板的 DOM** 数已执行的命令条数。
+ *
+ * ⚠️ 为什么不用 `sessionStore.getState().history.length`（M5b 实测否决了原做法）：
+ * 经 CDP `evalJs` 里 `import('/src/store/sessionStore.ts')` 拿到的**不是应用正在用的
+ * 那个模块实例**（实测 `sameModule === false`），其 `history` 恒为 0 ——
+ * 于是所有 `runCommand` 都会超时，而命令其实已经执行成功（面板里看得见）。
+ * 这类「读到的状态与 UI 不一致」的假象极难定位，故改用**渲染结果**作为事实来源。
+ *
+ * DOM 结构（`CommandHistory.tsx`）：每条命令渲染为
+ *   `<p class=command><span class=prompt>$</span>{input}</p>`
+ * 即 `$` 与命令文本在**同一行**（`innerText` 得到 `"$ git add ."`）。
+ * 故判据是「以 `$` 开头的行数」而非「整行只等于 `$` 的行数」。
+ * ⚠️ 输出行与错误行不带 `$` 前缀，因此计数不受它们影响。
  */
 async function histCount() {
-  return evalJs(`(async () => {
-    const mod = await import('/src/store/sessionStore.ts');
-    return mod.useSessionStore.getState().history.length;
+  return evalJs(`(() => {
+    const probe = document.querySelector('[data-testid="command-history"]');
+    const scope = probe ?? document.body;
+    // $ 是独立的提示符 span → 在 innerText 里独占一行；一行一个 $ 即一条命令
+    return scope.innerText.split('\\n').filter((line) => line.trim() === '$').length;
   })()`);
 }
 
@@ -476,9 +580,16 @@ async function resetStorage() {
   //    'complete'，在那上面调 indexedDB 会得到 SecurityError「denied in this
   //    context」（全新 Chrome profile 首开实测），清库就静默失败了。
   await send('Page.navigate', { url: APP });
+  // ⚠️ 判据必须**同时接受「菜单」与「关卡页」**（M5b 实测）：
+  //    M5a 起刷新会自动恢复上次所在的关卡，于是 boot 后的落点可能是**关卡页**
+  //    而非菜单 —— 此时 `progress-summary` 不存在、"进入时间线检修台" 也没有，
+  //    只认菜单会必然超时（本函数在 M5b 冒烟里就是这样卡住的）。
+  //    四者任一出现即可确认「已到 app 源且应用已挂载」。
   await waitFor(
-    `!!document.querySelector('[data-testid="progress-summary"]') || [...document.querySelectorAll('button')].some(b => b.textContent.includes('进入时间线检修台'))`,
-    '页面就绪（应用 UI 出现，已到达 app 源）',
+    `location.origin === new URL(${JSON.stringify(APP)}).origin` +
+      ` && !!document.querySelector('#root')` +
+      ` && (document.querySelector('#root').innerText ?? '').trim().length > 0`,
+    '页面就绪（已到达 app 源且应用已挂载）',
     30000,
   );
   await sleep(200);

@@ -19,6 +19,7 @@ import git from 'isomorphic-git';
 import type { FsClient } from 'isomorphic-git';
 import { fsp, getFs, REPO_DIR } from './fs';
 import { GitCommandError, GitResult, GitUnsupportedError, runGit } from './errors';
+import { createRemoteHttpClient } from './fileRemote';
 import { looksLikeHash, parseRefExpr } from './refExpr';
 import {
   formatReflog,
@@ -1984,4 +1985,294 @@ export async function isDescendent(
  */
 export function unsupported(subcommand: string): GitResult<never> {
   return { ok: false, error: new GitUnsupportedError(subcommand) };
+}
+
+// ── M5b：远程操作（第四章「星际连接」）────────────────────────────────────────
+//
+// 沙箱里的「远程宇宙」是 `/remote.git` 的一个内存裸仓库，经 `fileRemote.ts` 的
+// **进程内智能 HTTP 服务端**通信 —— isomorphic-git 的 fetch/push/clone 走的是
+// 标准 Git 智能 HTTP 协议，只是传输层不出浏览器。详见 fileRemote.ts 文件头。
+
+/**
+ * 远程 URL 的**白名单**（M5 决策 ③）。
+ *
+ * ⚠️ 为什么必须设白名单：探针 2 实测 `git.addRemote` **不做任何 URL 校验** ——
+ * 任意字符串（含 `https://github.com/...`）都会成功写进 `remote.origin.url`。
+ * 若不设限，玩家照抄第四章笔记里的 `https://github.com/user/repo.git` 会
+ * 「添加成功但后续 push/fetch 全崩」，属 §14 明令禁止的「假装执行」。
+ *
+ * ⚠️ 为什么必须是 `http://` 而非 `file://`：isomorphic-git 的
+ * `GitRemoteManager.getRemoteHelperFor` **只注册了 `http` 与 `https`** 两个
+ * transport（源码实测），任何 `file://` 地址都会抛
+ * `UnknownTransportError: uses an unrecognized transport protocol: "file"`。
+ * 而「本地通道」的实现方式是提供自定义 `http` 客户端（见 fileRemote.ts），
+ * 所以 URL 必须长得像 http，实际请求却不出浏览器。
+ *
+ * 采用沙箱专用域名 `sandbox`，让「这是虚拟远程」在命令行里一眼可见；
+ * 主机名不被解析（请求全部由我们的 http 客户端拦截）。
+ */
+export const ALLOWED_REMOTE_URL = 'http://sandbox/remote.git';
+
+/** 本地远程宇宙在沙箱内的裸仓库路径（与 fileRemote 的约定一致） */
+const SANDBOX_REMOTE_PATH = '/remote.git';
+
+/**
+ * 校验远程 URL 是否指向沙箱内的远程宇宙。
+ *
+ * 只接受约定的沙箱地址；其余一律拒绝并给出「本关只接受本地通道」的提示。
+ * 宽容地同时接受带/不带结尾 `.git` 的写法，避免玩家因一个后缀被卡住。
+ */
+export function isAllowedRemoteUrl(url: string): boolean {
+  const trimmed = url.trim().replace(/\/+$/, '');
+  return (
+    trimmed === ALLOWED_REMOTE_URL ||
+    trimmed === 'http://sandbox/remote' ||
+    trimmed === SANDBOX_REMOTE_PATH
+  );
+}
+
+/** `addRemote()` 的返回值 */
+export interface RemoteEntry {
+  name: string;
+  url: string;
+}
+
+/**
+ * `git remote add <name> <url>` —— 关联远程仓库。
+ *
+ * ⚠️ URL 白名单在**语法/执行层之前**就把关（决策 ③）：不合规的 URL 明确回
+ * 「本关的远程宇宙只接受本地通道」，而不是「添加成功但后续全崩」。
+ * 错误走 `GitUnsupportedError`（`kind: 'unsupported'`），UI 侧无需新增分支。
+ */
+export async function addRemote(
+  name: string,
+  url: string,
+  options: RepoOptions = {},
+): Promise<GitResult<RemoteEntry>> {
+  if (!isAllowedRemoteUrl(url)) {
+    return {
+      ok: false,
+      error: new GitUnsupportedError(
+        `remote add ${name} ${url}`,
+        `本关的远程宇宙只接受本地通道（${ALLOWED_REMOTE_URL}）。` +
+          `地址「${url}」指向沙箱之外，当前版本无法连接真实网络仓库。`,
+      ),
+    };
+  }
+
+  const base = fsArgs(options);
+  return runGit(`git remote add ${name} ${url}`, async () => {
+    await git.addRemote({ ...base, remote: name, url: ALLOWED_REMOTE_URL });
+    // addRemote 会自动写 refspec（+refs/heads/*:refs/remotes/<name>/*），
+    // 这是 fetch 的硬前提 —— 缺了它 fetch 报 NoRefspecError（与真 git 一致）。
+    return { name, url: ALLOWED_REMOTE_URL };
+  });
+}
+
+/** `git remote` / `git remote -v` —— 列出已关联的远程 */
+export async function listRemotes(
+  options: RepoOptions = {},
+): Promise<GitResult<RemoteEntry[]>> {
+  const base = fsArgs(options);
+  return runGit('git remote', async () => {
+    // ⚠️ isomorphic-git 用 `remote` 作字段名，本层归一为 `name` —— 与
+    //    `listBranches` 返回 `{ name }` 的既有风格一致，UI 侧不必记两套命名。
+    const remotes = await git.listRemotes(base);
+    return remotes.map((entry) => ({ name: entry.remote, url: entry.url }));
+  });
+}
+
+/** `git remote remove <name>` —— 删除远程关联 */
+export async function deleteRemote(
+  name: string,
+  options: RepoOptions = {},
+): Promise<GitResult<void>> {
+  const base = fsArgs(options);
+  return runGit(`git remote remove ${name}`, () => git.deleteRemote({ ...base, remote: name }));
+}
+
+/**
+ * 把 remote 的 URL 与 refspec 直接写进配置 —— 供 `sandbox.seedRemote` 预置远程用。
+ *
+ * ⚠️ 与 `addRemote()` 的差别：**不做白名单校验**。这不是漏洞，而是职责划分 ——
+ * 白名单把关的是**玩家输入**（`git remote add <url>`），而本函数是关卡数据在
+ * 初始化期写配置的通道，其 URL 由 `sandbox.seedRemote` 校验过（且实际恒为
+ * `ALLOWED_REMOTE_URL`）。把它做成「内部写入」而非复用 `addRemote`，是为了让
+ * 「玩家路径必须校验」这条规则在代码里一眼可见。
+ *
+ * ⚠️ `addRemote` 已会自动写 refspec；本函数显式再写一次是为了幂等 ——
+ * 预置流程可能对同一个 remote 调用多次（关卡数据里重复声明同一 name），
+ * 而 `git.addRemote` 对已存在的 remote 会抛 `AlreadyExistsError`。
+ */
+export async function writeRemoteConfig(
+  name: string,
+  url: string,
+  options: RepoOptions = {},
+): Promise<GitResult<void>> {
+  const base = fsArgs(options);
+  return runGit(`git remote set-url ${name}`, async () => {
+    await git.setConfig({ ...base, path: `remote.${name}.url`, value: url });
+    // fetch 的 refspec —— 缺了它 fetch 报 NoRefspecError（真 git 亦然）
+    await git.setConfig({
+      ...base,
+      path: `remote.${name}.fetch`,
+      value: `+refs/heads/*:refs/remotes/${name}/*`,
+    });
+  });
+}
+
+/**
+ * `git fetch <remote> [<ref>]` —— 只获取远程更新，不合并。
+ *
+ * 教学点（笔记 `git-remotes.md`「fetch vs pull」）：fetch 是安全的 ——
+ * 它把远程对象取回本地并更新 `refs/remotes/<remote>/*`，**不动工作区**。
+ */
+export async function fetch(
+  remote: string,
+  options: RepoOptions & { ref?: string } = {},
+): Promise<GitResult<void>> {
+  const base = fsArgs(options);
+  const url = ALLOWED_REMOTE_URL;
+  return runGit(`git fetch ${remote}`, async () => {
+    await git.fetch({
+      ...base,
+      // ⚠️ `http` 客户端的「打包源」必须是**裸仓**：fetch 的方向是
+      //    服务端 → 客户端，服务端要从自己的对象库里取对象。
+      //    若误传玩家仓库目录，服务端会在一个没有这些对象的仓库上 packObjects，
+      //    结果是协商成功但 packfile 为空，客户端报 `NotFoundError`（实测踩到）。
+      http: createRemoteHttpClient(SANDBOX_REMOTE_PATH),
+      remote,
+      url,
+      // ⚠️ `singleBranch` **只在指定了 ref 时才开**（实测缺陷）：
+      //    开了它而没给 `ref` 时，isomorphic-git 会把 remoteRef 落成 `HEAD`
+      //    并在公告的 refs 里解析它 —— 而真 git 的 advertisement **不发布 HEAD 行**
+      //    （HEAD 的指向经 `symref=` capability 表达），于是解析失败、
+      //    `git fetch origin` 报「找不到指定的文件或提交」。
+      //    不给 ref 时按真 git 语义取回**全部**分支的更新，正是玩家期望的行为。
+      ...(options.ref ? { ref: options.ref, singleBranch: true } : {}),
+    });
+  });
+}
+
+/**
+ * `git push <remote> [<ref>]` —— 把本地提交推送上去。
+ *
+ * ⚠️ 非快进的拒绝**由服务端发出**（`fileRemote.decidePush`）：真 git 的
+ * `receive.denyNonFastForwards` 语义。实测 isomorphic-git 的客户端也会先做一次
+ * 检测并抛 `PushRejectedError`（`data.reason: 'not-fast-forward'`）——
+ * 两条路径都保留，与真 git 的分工一致（客户端查「远程领先」，服务端查「陈旧 oldOid」）。
+ */
+export async function push(
+  remote: string,
+  options: RepoOptions & { ref?: string } = {},
+): Promise<GitResult<void>> {
+  const base = fsArgs(options);
+  return runGit(`git push ${remote}`, async () => {
+    await git.push({
+      ...base,
+      // push 是客户端 → 服务端，服务端不打包（数据随请求体推来），
+      // 故 sourceDir 传裸仓路径即可 —— 它只在 upload-pack 分支上被用到。
+      http: createRemoteHttpClient(SANDBOX_REMOTE_PATH),
+      remote,
+      url: ALLOWED_REMOTE_URL,
+      ...(options.ref ? { ref: options.ref } : {}),
+    });
+  });
+}
+
+/**
+ * `git clone <url> [<dir>]` —— 复制一个仓库到本地。
+ *
+ * 沙箱约定：克隆目标恒为 `/repo`（玩家主仓库），故 `dir` 由调用方给出。
+ * 用于 4-4「克隆宇宙」与 `LevelInit.template: 'cloneSource'`。
+ *
+ * ⚠️ **clone 前必须把目标清空**（M5b 实测踩到的坑）：
+ *   真 git 的 `git clone` 要求目标目录不存在或为空；而沙箱里 `/repo` 在
+ *   `sandbox.reset()` 里已经被 `git init` 过（哪怕 template 是 cloneSource），
+ *   直接 clone 会让 isomorphic-git 在**已有仓库**上做检出与 ref 写入，
+ *   报一个与真因无关的 `NotFoundError: Could not find <oid>`
+ *   （那个 oid 来自它内部对 HEAD 的解析，与远程的真实内容对不上）。
+ *   故此处先递归清空 `/repo` 再克隆 —— 与真 git「克隆到一个空目录」等价。
+ */
+export async function clone(
+  url: string,
+  options: RepoOptions = {},
+): Promise<GitResult<void>> {
+  if (!isAllowedRemoteUrl(url)) {
+    return {
+      ok: false,
+      error: new GitUnsupportedError(
+        `clone ${url}`,
+        `本关的远程宇宙只接受本地通道（${ALLOWED_REMOTE_URL}）。`,
+      ),
+    };
+  }
+
+  const base = fsArgs(options);
+  const dir = options.dir ?? REPO_DIR;
+  return runGit('git clone', async () => {
+    // 清空目标目录（保留目录本身），让 clone 面对一个干净的空目录
+    const { removeDir } = await import('./fs');
+    const fs = getFs().promises;
+    await removeDir(dir);
+    await fs.mkdir(dir, { mode: 0o777 });
+
+    // ⚠️ clone 的源仓库是裸仓自身，故 http 客户端的「打包源」指向 /remote.git
+    await git.clone({
+      ...base,
+      http: createRemoteHttpClient(SANDBOX_REMOTE_PATH),
+      url: ALLOWED_REMOTE_URL,
+      singleBranch: true,
+      noCheckout: false,
+    });
+  });
+}
+
+/**
+ * `git pull <remote> [<ref>]` —— fetch + merge 的组合（笔记的官方等式）。
+ *
+ * ⚠️ 不复用 isomorphic-git 的 `git.pull`：它的合并路径不支持我们需要的
+ * 「ff 后同步工作区」修正（见 `merge()` 的注释 —— isomorphic-git 的合并
+ * **只移 ref 不更新工作区**，这是 M4 就踩过的坑）。
+ * 故按笔记的字面语义手动组合 fetch → merge，行为与真 git 一致且可解释。
+ */
+export async function pull(
+  remote: string,
+  options: RepoOptions & { ref?: string } = {},
+): Promise<GitResult<{ merged: boolean; fastForward: boolean; upToDate: boolean }>> {
+  const ref = options.ref ?? DEFAULT_BRANCH;
+
+  const fetched = await fetch(remote, options);
+  if (!fetched.ok) return fetched;
+
+  // fetch 之后远程跟踪分支为 `refs/remotes/<remote>/<ref>`；merge 需要分支名可解析。
+  // 直接以 `refs/remotes/<remote>/<ref>` 作为 theirs 传入（真 git 的 `git merge origin/main` 同款）。
+  const remoteRef = `${remote}/${ref}`;
+  const merged = await merge(remoteRef, options);
+  if (!merged.ok) return merged;
+
+  const result = merged.value;
+  if ('conflicted' in result) {
+    return {
+      ok: false,
+      error: new GitCommandError(
+        'MergeConflictError',
+        `拉取的内容与本地改动冲突（涉及 ${result.conflictedPaths.length} 个文件）。`,
+        `pull merge conflicted: ${result.conflictedPaths.join(', ')}`,
+        {
+          command: `git pull ${remote} ${ref}`,
+          hint: '解决冲突文件中的标记后 git add，再 git commit 完成这次合并。',
+        },
+      ),
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      merged: result.mergeCommit,
+      fastForward: result.fastForward,
+      upToDate: !result.mergeCommit && !result.fastForward,
+    },
+  };
 }

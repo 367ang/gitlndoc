@@ -112,6 +112,49 @@ describe('fragments —— draftFromSkeleton（半拼骨架，M4）', () => {
   })
 })
 
+
+describe('fragments —— 第四章片段表与骨架（M5b）', () => {
+  const level41 = assertValidLevel(getLevel('ch4-1'))
+
+  it('ch4 片段表含 remote/clone/push/fetch/pull 五个命令组', () => {
+    const pool = fragmentsForLevel(level41)
+    const commands = new Set(pool.map((f) => f.command))
+    for (const cmd of ['git remote', 'git clone', 'git push', 'git fetch', 'git pull']) {
+      expect(commands, `片段池缺少 ${cmd}`).toContain(cmd)
+    }
+  })
+
+  it('⚠️ 回归锁：每个命令组都必须有 slot0 —— 否则骨架预填静默失败', () => {
+    // 这条断言锁定一个**两次踩到**的缺陷：draftFromSkeleton 靠「slot0 + slot1 同命令」
+    // 锁定命令组，缺 slot0 时返回空草稿、执行按钮恒灰，玩家根本拼不出命令
+    // （M4 的 merge/rebase、M5b 的 remote/clone/push/fetch/pull 都中过招）。
+    const pool = fragmentsForLevel(level41)
+    const commands = [...new Set(pool.map((f) => f.command))]
+    for (const command of commands) {
+      const hasSlot0 = pool.some((f) => f.command === command && f.slot === 0)
+      expect(hasSlot0, `${command} 缺少 slot0 片段`).toBe(true)
+    }
+  })
+
+  it('ch1~ch4 全部半拼关卡的骨架都能预填出非空草稿', () => {
+    // 通用性质：骨架必须真的能落进槽位。extendle 章节时这条会自动覆盖新关卡。
+    for (const id of ['ch3-1', 'ch4-1', 'ch4-2', 'ch4-3', 'ch4-4', 'ch4-5']) {
+      const level = assertValidLevel(getLevel(id))
+      const pool = fragmentsForLevel(level)
+      const draft = draftFromSkeleton(level.halfSkeleton ?? '', pool)
+      const filled = draft.slots.filter((slot) => slot !== undefined)
+      expect(filled.length, `${id} 的骨架「${level.halfSkeleton}」预填为空`).toBeGreaterThan(0)
+    }
+  })
+
+  it('4-1 的骨架 git remote 预填出 slot0 + slot1', () => {
+    const pool = fragmentsForLevel(level41)
+    const draft = draftFromSkeleton('git remote', pool)
+    expect(draft.slots[0]?.text).toBe('git')
+    expect(draft.slots[1]?.text).toBe('remote')
+  })
+})
+
 describe('completion —— Tab 补全纯函数（M4）', () => {
   const candidates = ['main', 'feature', 'diary.md', 'notes/first.md']
 
@@ -141,11 +184,26 @@ describe('completion —— Tab 补全纯函数（M4）', () => {
 
   it('输入 git checkout f → 分支名候选生效', () => {
     const result = completeAtEnd({ input: 'git checkout f', candidates })
-    expect(result.matches).toEqual(['feature'])
+    // ⚠️ M5b 起白名单含 `fetch`，故 `f` 的候选是分支名 + fetch（两者都是合法前缀）。
+    //    本用例验证的是「动态候选（分支名）与白名单会合并且去重」，不是唯一性。
+    expect(result.matches).toEqual(['feature', 'fetch'])
+    expect(result.matches).toContain('feature')
   })
 
   it('git log 后的 --oneline 候选来自白名单', () => {
     const result = completeAtEnd({ input: 'git log --', candidates: [] })
-    expect(result.matches).toEqual(['--all', '--cached', '--oneline', '--staged'])
+    // M5a 增补 --soft/--mixed/--hard/--amend/--no-edit。
+    // ⚠️ M5b 的 `-v` 是单横线旗标，不匹配 `--` 前缀，故不出现在本组候选中。
+    expect(result.matches).toEqual([
+      '--all',
+      '--amend',
+      '--cached',
+      '--hard',
+      '--mixed',
+      '--no-edit',
+      '--oneline',
+      '--soft',
+      '--staged',
+    ])
   })
 })

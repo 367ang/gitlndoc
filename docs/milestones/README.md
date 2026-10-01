@@ -15,7 +15,7 @@
 | M2（关卡框架） | [M2-tasks.md](M2-tasks.md) | ✅ 完成 | `levels/schema.ts` + 第一章 4 关 + Terminal/FileTree/GoalPanel + 目标检测，第一章（菜单式）可玩 |
 | M3（计分） | [M3-tasks.md](M3-tasks.md) | ✅ 完成 | 计分引擎（`evaluateScore`/`starsOf`）+ 5 成就 + 结算 UI + 空提交引擎修复 |
 | M4（第 2–3 章） | [M4-tasks.md](M4-tasks.md) | ✅ 完成 | ch2 四关 + ch3 六关 + GitGraph + BranchPanel + Tab 补全 + 文件编辑器（含新建文件）+ 章节解锁 |
-| M5（撤销与远程、快照持久化） | [M5-tasks.md](M5-tasks.md) | 🚧 M5a ✅ / M5b ⏳ | **拆为两批**：**M5a ✅** 第五章 6 关（reset/restore/amend/revert/reflog）+ 快照持久化 + 刷新自动恢复中途进度；**M5b ⏳** 第四章 5 关 + 本地远程客户端 |
+| M5（撤销与远程、快照持久化） | [M5-tasks.md](M5-tasks.md) | ✅ **完成**（M5a + M5b） | **拆为两批，均已交付**：**M5a** 第五章 6 关（reset/restore/amend/revert/reflog）+ 快照持久化 + 刷新自动恢复中途进度；**M5b** 第四章 5 关 + 本地内存裸仓库 + 进程内智能 HTTP 服务端 |
 
 ### M1 两篇文档的关系
 
@@ -32,6 +32,7 @@
 | M3 | 0 错误 | 176 passed，0 todo | 157.53 kB |
 | M4 | 0 错误 | 228 passed，0 todo | 169.76 kB |
 | M5a | 0 错误 | **332 passed**，0 todo | **179.69 kB** |
+| M5b | 0 错误 | **378 passed**（11 文件），0 todo | **187.61 kB** |
 
 构建预算见 `development-refinement.md` §12（约 350 kB），当前余量充足。
 
@@ -43,3 +44,4 @@
 | M3 | 20/20 | 沿 M2 方法 |
 | M4 | 分段 30/30（两轮连跑无 flake） | 方案 A：进度种子 + 条件轮询 + data 属性定位，脚本见 [tools/smoke/](../../tools/smoke/README.md) |
 | M5a | **四段 72/72**（ch5 段两轮连跑无 flake） | 沿 M4 方案；新增 `smoke:ch5`（41 断言）+ free 模式真实键盘输入 + 持久化 reload 复核 + **刷新自动恢复中途进度**断言 |
+| M5b | **五段 105/105** | 新增 `smoke:ch4`（33 断言）：半拼骨架预填 + **URL 白名单负向路径** + remote/push/pull/clone + **4-5 完整协作冲突剧本**（push 被拒 → fetch → merge）+ ch4⇒ch5 解锁链路。同时修复了冒烟基础设施的 5 处既有隐患（见 M5-tasks.md「冒烟基础设施的修正」） |

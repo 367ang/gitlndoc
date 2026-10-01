@@ -18,7 +18,7 @@
 
 ## 当前状态
 
-**M1（地基）～ M4（第 2–3 章、GitGraph、BranchPanel、Tab 补全、文件编辑）与 M5a（第五章「时空回溯」+ 快照持久化 + 刷新自动恢复中途进度）均已完成**，三门禁当前为 **`typecheck` 0 / `test` 332 passed / `build` 179.69 kB gzip**（M5a 实测）。下一阶段为 **M5b（第四章「星际连接」+ 本地远程客户端）**。
+**M1（地基）～ M5（第五章撤销 + 快照持久化 + 刷新自动恢复中途进度；第四章「星际连接」+ 本地远程客户端）全部完成**，三门禁当前为 **`typecheck` 0 / `test` 378 passed / `build` 187.61 kB gzip**（M5b 实测）。下一阶段为 **M6（第六章「历史锚点」标签 + 综合终章 F）**。
 
 各里程碑的**产出、三门禁历史、实测环境事实与遗留移交**见 **`docs/milestones/README.md`**（索引）与 `docs/milestones/M*-tasks.md`（各期详情），本文件不复述。
 
@@ -41,6 +41,46 @@
 12. **`smoke` 脚本必须在开头 `resetStorage()`**：M5a 起进度落 localStorage，上次冒烟留下的记录会被下次读到（段3 的「无进度时 ch2 锁定」因此失败，实测）。
 13. **不要给 LightningFS 换实例**（M5a 已否决并移除 `mountFs`）：切换出的新实例上 isomorphic-git 的写入会**静默丢失**（`git.init` 返回成功但 `.git` 没落盘）—— 其 `_activate()` 是逐操作惰性异步的，任何等待/读同步点都无法可靠消除该竞态。仓库快照因此走 `persistence/snapshot.ts` 的**显式导出/导入**（fs 单例不动，遍历虚拟根 → 单一 IndexedDB 库 `gtp:snapshots:v1` → 恢复时按「父先于子」写回）；`gtp:active-level:v1` 记「正在哪一关」，boot 的恢复分支**绝不调 `sandbox.reset()`**。
 
+**M5b 新增的引擎事实（第四章「星际连接」的全部依据）：**
+
+14. **远程宇宙 = 内存裸仓库 + 进程内 smart-HTTP 服务端**（`engine/fileRemote.ts`）。
+    ⚠️ 关键认知：**isomorphic-git 的 `fetch`/`push`/`clone` 都接受自定义 `http` 客户端，
+    且已完整实现智能 HTTP 的「客户端」侧** —— 故我们只需实现**服务端**应答，
+    不必自写协议编解码器。走的是真协议、真 pkt-line、真 packfile。
+15. ⚠️ **`git.packObjects({ oids })` 不做可达性递归**（本里程碑最费时的坑）：
+    只传提交 oid 会得到「只有提交对象」的残缺 pack —— fetch 协商成功、ref 也建好了，
+    但一检出工作区就报 `NotFoundError: Could not find <tree oid>`。
+    **服务端必须自己走图**（`collectReachableObjects`：commit → tree → 子树/blob + 祖先提交）。
+16. ⚠️ **`git.readObject` 没有 `'parsed'` 格式**（只接受 `deflated`/`wrapped`/`content`，
+    传错抛 `InternalError`，TS 类型也不拦）；要读结构化对象须用
+    `git.readCommit` / `git.readTree`。另：**`readTree` 返回的 `tree` 就是条目数组**
+    （`TreeObject = TreeEntry[]`），**不是**带 `.entries` 的对象。
+17. ⚠️ **ref advertisement 必须同时有 `HEAD` 行与 `symref=HEAD:refs/heads/<分支>` capability**：
+    少 HEAD → 多分支 fetch 报「找不到指定的文件或提交」；
+    有 HEAD 但无 symref → HEAD 被当普通 ref，`refs/remotes/origin/main` **根本没建立**
+    （fetch 不报错，随后的 `git merge origin/main` 才报「找不到」）。
+    以 `git upload-pack --advertise-refs` 实测校准。
+18. ⚠️ **`indexPack` 的 `filepath` 必须是相对 `dir` 的路径**：内部无条件 `join(dir, filepath)`，
+    传绝对路径会双拼，且 `FileSystem.read` 把 ENOENT **静默吞成 `null`**，
+    最终报 `TypeError: Cannot read properties of null`（与真因毫无关系）。
+19. ⚠️ **远程 URL 必须长得像 http**：`GitRemoteManager` 只注册了 `http`/`https` 两个 transport，
+    任何 `file://` 都抛 `UnknownTransportError`。沙箱地址因此定为
+    `http://sandbox/remote.git`（`gitApi.ALLOWED_REMOTE_URL`），
+    **白名单是必要的** —— 实测 `git.addRemote` 自己不做任何 URL 校验。
+20. ⚠️ **`git.clone` 前必须清空目标目录**：`/repo` 已被 `sandbox.reset()` 初始化过，
+    直接在已有仓库上 clone 会报与真因无关的 `NotFoundError`。
+21. ⚠️ **`git push` 会自行检测非快进**并抛 `PushRejectedError`
+    （`data.reason: 'not-fast-forward'`）；服务端也按真 git 的
+    `receive.denyNonFastForwards` 语义做一次判定。两条路径都要保留。
+22. ⚠️ **新增章节时必须同时补三处**，缺一即「命令能执行但玩家拼不出来」：
+    ① `grammar` 白名单；② `executor` 分发；③ **`fragments.ts` 的本章片段表
+    + `COMMON_GIT_SLOT` 里该章每个命令组的 slot0**（缺 slot0 会让
+    `draftFromSkeleton` 静默返回空草稿、执行按钮恒灰）。`inputMode.test.ts` 有回归锁。
+23. ⚠️ **冒烟脚本不要用 `import('/src/store/*.ts')` 读应用状态**：经 CDP `evalJs`
+    拿到的**不是应用正在用的模块实例**（实测 `sameModule === false`），
+    其 `history`/`view` 恒为初始态，断言会稳定假失败。
+    一律改为读 **DOM**（`data-testid="command-history"` 等渲染结果才是事实来源）。
+
 > 另需注意：`development-refinement.md` §8 的「主要命令集」列曾与 GDD 不一致 —— 第一章被误写为 `init, status, log`、第二章被误写为 `add, commit, .gitignore`，**已于 M2 开工前按 GDD 订正**为「一：`init, add, commit`」「二：`status, diff, log, rm, .gitignore`」。§8 是逐章核对过的，其余行与 GDD 一致（个别概括性差异，如三章未列 `switch`、六章列了 `show`/`describe`，属「主要命令」的合理列举）。**若再改 §8，务必与 `game-design.md` 第 4 节的关卡表逐行比对。**
 
 ## 命令
@@ -51,10 +91,11 @@ pnpm build           # tsc -b && vite build（构建包含类型检查）
 pnpm preview         # 预览生产构建产物
 pnpm typecheck       # tsc --noEmit（不产出文件的快速类型检查，提交前运行）
 pnpm test            # Vitest（watch 模式）；CI/单次运行用 `pnpm test:run` 或 `pnpm vitest run <file>`
-pnpm smoke:legacy    # 真实浏览器冒烟（真实 Chrome + CDP）；四段独立运行，见 tools/smoke/README.md
+pnpm smoke:legacy    # 真实浏览器冒烟（真实 Chrome + CDP）；五段独立运行，见 tools/smoke/README.md
 pnpm smoke:ch2
 pnpm smoke:ch3
 pnpm smoke:ch5       # M5a 新增（第五章六关 + 持久化/刷新恢复复核）
+pnpm smoke:ch4       # M5b 新增（第四章五关 + 远程协议 + 协作冲突剧本）
 ```
 
 包管理器：**统一使用 pnpm**（与工程文档 §12 的技术选型一致）。`package.json` 中的 `scripts` 字段供 pnpm 调用，不要改用 npm。
@@ -65,7 +106,7 @@ pnpm smoke:ch5       # M5a 新增（第五章六关 + 持久化/刷新恢复复�
 > ```
 > 同一原因也会导致 `gh` 不可见（影响推送）。
 
-测试运行器已在 M1 配好：**Vitest + @testing-library/react**（`vite.config.ts` 的 `test` 字段，`environment: 'jsdom'`，`globals: true`），测试置于 `src/__tests__/`。**M5a 后共 10 个文件**：`tokenize.test.ts`(22)、`executor.test.ts`(71)、`targetState.test.ts`(32)、`components.test.tsx`(50)、`levels.test.ts`(54)、`scoring.test.ts`(21)、`inputMode.test.ts`(12)、`refExpr.test.ts`(24)、`persistence.test.ts`(37)、`progression.test.ts`(9) 全部为真实用例（**332 passed**，无 todo）。
+测试运行器已在 M1 配好：**Vitest + @testing-library/react**（`vite.config.ts` 的 `test` 字段，`environment: 'jsdom'`，`globals: true`），测试置于 `src/__tests__/`。**M5b 后共 11 个文件**：`tokenize.test.ts`(22)、`executor.test.ts`(71)、`targetState.test.ts`(35)、`components.test.tsx`(51)、`levels.test.ts`(77)、`scoring.test.ts`(21)、`inputMode.test.ts`(16)、`refExpr.test.ts`(24)、`persistence.test.ts`(37)、`progression.test.ts`(11)、**`fileRemote.test.ts`(13，M5b 新增)** 全部为真实用例（**378 passed**，无 todo）。
 
 > ⚠️ `src/__tests__/setup.ts` 里的 `import 'fake-indexeddb/auto'` **不可删除**：jsdom 不提供 `navigator.locks`，LightningFS 的 `DefaultBackend` 会因此回落到需要 `indexedDB` 的 `Mutex` 分支，删掉即全部测试报 `ReferenceError: indexedDB is not defined`。机理详见 `docs/milestones/M1-tasks.md` 的「实测环境事实」第 2 条。
 

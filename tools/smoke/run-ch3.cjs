@@ -73,11 +73,15 @@ const H = require('./cdp-client.cjs');
   await H.typeSuffix(' feature');
   await H.runCommand();
   // merge 后出现冲突输出（结算页未出现）——检查冲突标记已落工作区
+  //
+  // ⚠️ 判据改为**读命令历史面板的 DOM**：经 CDP 的 `import('/src/store/sessionStore.ts')`
+  //    拿到的不是应用正在用的模块实例，其 history 恒为空（M5b 实测），
+  //    旧写法会在这里稳定超时。渲染结果才是可靠来源。
   await H.waitFor(
-    `(async () => {
-      const m = await import('/src/store/sessionStore.ts');
-      const last = m.useSessionStore.getState().history.at(-1);
-      return last && last.ok && last.output.join('\\n').includes('冲突');
+    `(() => {
+      const probe = document.querySelector('[data-testid="command-history"]');
+      const scope = probe ?? document.body;
+      return scope.innerText.includes('冲突');
     })()`,
     'merge 冲突输出出现',
   );
@@ -121,16 +125,19 @@ const H = require('./cdp-client.cjs');
   // ── 终态：ch1~ch3 共 14 关全部通关（总关卡数在 M5a 后为 20）──
   await H.backToMenu();
   const summary = await H.evalJs(`document.querySelector('[data-testid="progress-summary"]')?.textContent ?? ''`);
-  H.check('汇总 14/20（ch1~ch3 全部通关）', summary.includes('通关 14/20'), summary.slice(0, 60));
+  // ⚠️ 分母随里程碑增长：M5a=20 → **M5b=25（ch4 注册）**；分子恒为 14（ch1~ch3）。
+  H.check('汇总 14/25（ch1~ch3 全部通关）', summary.includes('通关 14/25'), summary.slice(0, 60));
 
-  // ⚠️ M5a 追加：ch1~ch3 全通关后，ch5 应可进入（ch4 属 M5b、无关卡，
-  //    解锁规则会向前回溯到 ch3 —— 见 game/progression.ts 的修订说明）。
-  //    这是「第五章可玩」在真实浏览器里的端到端证据。
+  // ⚠️ **M5b 变更**：ch4 已落地 5 关，解锁规则随之自动回到「逐级相邻」——
+  //    ch5 的前一个有卡章节是 ch4，故「ch1~ch3 全通关」**不再**能解锁 ch5。
+  //    本段因此改为断言 **ch4 解锁**（这正是 M5b 要验证的新事实）。
+  //    ch5 的解锁链路由 `run-ch4.cjs`（ch4 全通关 → ch5 解锁）与
+  //    `progression.test.ts`（规则本身）覆盖。
   await H.waitFor(
-    `document.querySelector('[aria-label="查看章节 ch5 时空回溯"]')?.disabled === false`,
-    'ch1~ch3 全通关后 ch5 可进入（跳过尚未实现的 ch4）',
+    `document.querySelector('[aria-label="查看章节 ch4 星际连接"]')?.disabled === false`,
+    'ch1~ch3 全通关后 ch4 可进入（M5b 起逐级相邻）',
   );
-  H.check('ch5 解锁（ch4 无关卡时向前回溯到 ch3）', true);
+  H.check('ch4 解锁（M5b 起 ch4 有关卡，逐级相邻生效）', true);
 
   // 控制台无异常（页面级捕获）
   const ok = H.summarize('段2 ch3');

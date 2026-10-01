@@ -4,10 +4,11 @@
  * 职责：把 token 数组解析成 `git <verb> [flags] [args]` 结构，校验参数个数与合法性，
  * 产出**规范化的判别联合参数对象**。本层只做「认不认得」，不碰 git、不执行任何东西。
  *
- * ⚠️ M5a 起的白名单：`init` / `add` / `commit` / `status` / `log` / `branch` /
+ * ⚠️ M5b 起的白名单：`init` / `add` / `commit` / `status` / `log` / `branch` /
  * `checkout` / `switch` / `merge` / `rebase` / `rm` / `diff` /
- * **`reset` / `restore` / `revert` / `reflog`**（第五章「时空回溯」）。
- * 其余子命令（tag / remote / clone / push / fetch / pull / stash …）返回
+ * `reset` / `restore` / `revert` / `reflog`（第五章「时空回溯」）/
+ * **`remote` / `clone` / `push` / `fetch` / `pull`**（第四章「星际连接」）。
+ * 其余子命令（tag / stash …）返回
  * `kind: 'unsupported'` 的校验结果 ——
  * 依据 §14「grammar 层做子集白名单，超出范围给『该版本不支持』提示而非假装执行」，
  * 绝不落到执行层。
@@ -16,7 +17,7 @@
  * 与 `engine/errors.ts::GitUnsupportedError` 的文案保持一致，见 `unsupportedMessage()`。
  */
 
-/** M5a 支持解析的 verb 白名单 */
+/** M5b 支持解析的 verb 白名单 */
 export const SUPPORTED_VERBS = [
   'init',
   'add',
@@ -35,6 +36,12 @@ export const SUPPORTED_VERBS = [
   'restore',
   'revert',
   'reflog',
+  // M5b：第四章「星际连接」
+  'remote',
+  'clone',
+  'push',
+  'fetch',
+  'pull',
 ] as const;
 
 
@@ -172,6 +179,60 @@ export interface ReflogCommand {
   verb: 'reflog';
 }
 
+// ── M5b：第四章「星际连接」的五个命令 ────────────────────────────────────────
+
+/** `git remote` 的子操作（对齐真 git 的常见形态） */
+export type RemoteSubcommand = 'list' | 'add' | 'remove';
+
+/** `git remote [-v]` / `git remote add <name> <url>` / `git remote remove <name>`（M5b） */
+export interface RemoteCommand {
+  verb: 'remote';
+  /** 缺省（无参数）= 列出远程；`-v` 只影响输出详略，不影响语义 */
+  subcommand: RemoteSubcommand;
+  /** `add` / `remove` 的目标远程名 */
+  name?: string;
+  /** 仅 `add` 有：远程地址（由执行层做白名单校验） */
+  url?: string;
+}
+
+/** `git clone <url> [<dir>]` 的规范化参数（M5b） */
+export interface CloneCommand {
+  verb: 'clone';
+  /** 远程地址（执行层做白名单校验） */
+  url: string;
+  /** 可选的目标目录；沙箱内恒克隆到 `/repo`，故仅记录玩家是否写了路径 */
+  dir?: string;
+}
+
+/** `git push [<remote>] [<branch>]` 的规范化参数（M5b） */
+export interface PushCommand {
+  verb: 'push';
+  /** 远程名；缺省由执行层回落到 `origin` */
+  remote?: string;
+  /** 要推送的分支；缺省 = 当前分支 */
+  branch?: string;
+  /** `--all`：推送所有分支（本版本明确不支持，语法层直接拒绝） */
+  all: boolean;
+}
+
+/** `git fetch [<remote>] [<branch>]` 的规范化参数（M5b） */
+export interface FetchCommand {
+  verb: 'fetch';
+  /** 远程名；缺省由执行层回落到 `origin` */
+  remote?: string;
+  /** 要获取的分支；缺省 = 远程的默认分支 */
+  branch?: string;
+}
+
+/** `git pull [<remote>] [<branch>]` 的规范化参数（M5b） */
+export interface PullCommand {
+  verb: 'pull';
+  /** 远程名；缺省由执行层回落到 `origin` */
+  remote?: string;
+  /** 要拉取的分支；缺省 = 当前分支对应的远程分支 */
+  branch?: string;
+}
+
 /** 命令参数的判别联合 */
 export type ParsedCommand =
   | InitCommand
@@ -188,7 +249,12 @@ export type ParsedCommand =
   | ResetCommand
   | RestoreCommand
   | RevertCommand
-  | ReflogCommand;
+  | ReflogCommand
+  | RemoteCommand
+  | CloneCommand
+  | PushCommand
+  | FetchCommand
+  | PullCommand;
 
 
 /** 校验失败的类别，供 UI 决定呈现方式（提示 / 报错 / 警告） */
@@ -286,6 +352,17 @@ export function parse(tokens: string[]): GrammarResult {
       return parseRevert(rest);
     case 'reflog':
       return parseReflog(rest);
+    // M5b：第四章「星际连接」
+    case 'remote':
+      return parseRemote(rest);
+    case 'clone':
+      return parseClone(rest);
+    case 'push':
+      return parsePush(rest);
+    case 'fetch':
+      return parseFetch(rest);
+    case 'pull':
+      return parsePull(rest);
     default:
       // SUPPORTED_VERBS 已在上方过滤，此处不可达；保留以满足穷尽性检查
       return fail('unsupported', unsupportedMessage(verb));
@@ -760,5 +837,211 @@ function parseReflog(args: string[]): GrammarResult {
     return fail('invalid-usage', `git reflog 暂不支持参数 ${args[0]}（本版本仅支持无参数查看全部记录）。`);
   }
   return { ok: true, command: { verb: 'reflog' } };
+}
+
+// ── M5b：第四章「星际连接」的五个命令 ────────────────────────────────────────
+
+/**
+ * 远程名的最小合法性（与分支名同款约束）。
+ *
+ * ⚠️ 刻意**不**校验 URL —— 那是执行层的白名单职责（`gitApi.isAllowedRemoteUrl`）。
+ * 语法层只负责「这个 token 看起来是个名字吗」，把「地址指向哪里」的判断留给
+ * 唯一的事实来源，避免两处规则漂移。
+ */
+function isValidRemoteName(name: string): boolean {
+  return name.length > 0 && !name.startsWith('-') && !/\s/.test(name) && !name.includes('..');
+}
+
+const REMOTE_NAME_HINT = '远程名不能包含空格，且不能以 - 开头。';
+
+/**
+ * `git remote` / `git remote -v` / `git remote add <name> <url>` / `git remote remove <name>`（M5b）
+ *
+ * ⚠️ 本版本只支持这四种形态。真 git 还有 `set-url` / `rename` / `show` / `prune` 等，
+ * 笔记 `git-remotes.md` 也提到了 `set-url` / `rename` —— 它们**不在 GDD §4 第四章的
+ * 关卡命令列里**，故不实现，命中时明确回「该版本不支持」（§14），不猜测玩家意图。
+ */
+function parseRemote(args: string[]): GrammarResult {
+  // 无参数 = 列出远程（真 git 的 `git remote`）
+  if (args.length === 0) {
+    return { ok: true, command: { verb: 'remote', subcommand: 'list' } };
+  }
+
+  const [first, ...restArgs] = args;
+
+  // `-v` / `--verbose`：仅影响输出详略（列出 URL），语义与无参数相同
+  if (first === '-v' || first === '--verbose') {
+    if (restArgs.length > 0) {
+      return fail('invalid-usage', `git remote ${first} 不接受其它参数。`);
+    }
+    return { ok: true, command: { verb: 'remote', subcommand: 'list' } };
+  }
+
+  if (first === 'add') {
+    const positional = restArgs.filter((arg) => !isFlag(arg));
+    const flag = restArgs.find((arg) => isFlag(arg));
+    if (flag !== undefined) {
+      return fail('invalid-usage', `git remote add 不支持选项 ${flag}。`);
+    }
+    if (positional.length !== 2) {
+      return fail(
+        'invalid-usage',
+        `git remote add 需要「名称 + 地址」两个参数，例如：git remote add origin http://sandbox/remote.git。` +
+          REMOTE_NAME_HINT,
+      );
+    }
+    const [name, url] = positional;
+    if (!isValidRemoteName(name)) {
+      return fail('invalid-usage', `「${name}」不是有效的远程名。${REMOTE_NAME_HINT}`);
+    }
+    return { ok: true, command: { verb: 'remote', subcommand: 'add', name, url } };
+  }
+
+  // `remove` 的别名 `rm`（真 git 两者等价）
+  if (first === 'remove' || first === 'rm') {
+    const flag = restArgs.find((arg) => isFlag(arg));
+    if (flag !== undefined) {
+      return fail('invalid-usage', `git remote ${first} 不支持选项 ${flag}。`);
+    }
+    if (restArgs.length !== 1) {
+      return fail('invalid-usage', `git remote ${first} 需要恰好一个远程名，例如：git remote remove origin。`);
+    }
+    const [name] = restArgs;
+    if (!isValidRemoteName(name)) {
+      return fail('invalid-usage', `「${name}」不是有效的远程名。${REMOTE_NAME_HINT}`);
+    }
+    return { ok: true, command: { verb: 'remote', subcommand: 'remove', name } };
+  }
+
+  // 其余子命令（set-url / rename / show / prune …）属本版本范围外
+  return fail(
+    'invalid-usage',
+    `git remote ${first} 在当前版本中尚不支持（本版本支持：git remote、git remote -v、` +
+      `git remote add <名称> <地址>、git remote remove <名称>）。`,
+  );
+}
+
+/** `git clone <url> [<dir>]`（M5b，服务 4-4「克隆宇宙」） */
+function parseClone(args: string[]): GrammarResult {
+  const positional: string[] = [];
+  for (const arg of args) {
+    if (isFlag(arg)) {
+      return fail('invalid-usage', `git clone 暂不支持选项 ${arg}（如 --depth / --bare）。`);
+    }
+    positional.push(arg);
+  }
+
+  if (positional.length === 0) {
+    return fail(
+      'invalid-usage',
+      'git clone 需要远程地址，例如：git clone http://sandbox/remote.git。',
+    );
+  }
+  if (positional.length > 2) {
+    return fail('invalid-usage', 'git clone 最多接受「地址 + 目标目录」两个参数。');
+  }
+
+  const [url, dir] = positional;
+  // ⚠️ 沙箱内克隆目标恒为 /repo（玩家主仓库）—— 传别的目录会得到一个自己看不到的仓库。
+  //    故语法层就拦下，而不是让它「成功但没人能找到」。
+  if (dir !== undefined && dir !== '.' && dir !== './') {
+    return fail(
+      'invalid-usage',
+      '本关的克隆目标固定是当前目录（省略目录参数即可），例如：git clone http://sandbox/remote.git。',
+    );
+  }
+
+  return { ok: true, command: { verb: 'clone', url } };
+}
+
+/**
+ * 解析 `[<remote>] [<branch>]` 这种「可选远程 + 可选分支」的公共形态。
+ *
+ * 真 git 的 push / fetch / pull 都接受这种省略写法（`git push` = 推当前分支到
+ * 它的上游），故三个命令共用本函数，保证省略语义一致。
+ */
+function parseRemoteRefArgs(
+  verb: 'push' | 'fetch' | 'pull',
+  args: string[],
+): { ok: true; remote?: string; branch?: string } | { ok: false; error: string } {
+  const positional: string[] = [];
+  for (const arg of args) {
+    if (isFlag(arg)) {
+      return { ok: false, error: `git ${verb} 暂不支持选项 ${arg}。` };
+    }
+    positional.push(arg);
+  }
+
+  if (positional.length > 2) {
+    return {
+      ok: false,
+      error: `git ${verb} 最多接受「远程名 + 分支名」两个参数，例如：git ${verb} origin main。`,
+    };
+  }
+
+  const [remote, branch] = positional;
+  if (remote !== undefined && !isValidRemoteName(remote)) {
+    return { ok: false, error: `「${remote}」不是有效的远程名。${REMOTE_NAME_HINT}` };
+  }
+  // 分支名允许 `HEAD` 这类符号引用写法？——不允许：真 git 的分支参数是分支名，
+  // 传 `HEAD` 需显式写成 `HEAD:refs/heads/...`（refspec），本版本不支持 refspec。
+  if (branch !== undefined && !isValidBranchName(branch)) {
+    return { ok: false, error: `「${branch}」不是有效的分支名。${BRANCH_NAME_HINT}` };
+  }
+
+  const result: { ok: true; remote?: string; branch?: string } = { ok: true };
+  if (remote !== undefined) result.remote = remote;
+  if (branch !== undefined) result.branch = branch;
+  return result;
+}
+
+/** `git push [<remote>] [<branch>]`（M5b，服务 4-2「传送数据」） */
+function parsePush(args: string[]): GrammarResult {
+  // `--all` / `--tags` / `--force` 等：本版本明确不支持，给出可见提示而非静默忽略
+  const unsupportedFlag = args.find(
+    (arg) => arg === '--all' || arg === '--tags' || arg === '--force' || arg === '-f',
+  );
+  if (unsupportedFlag !== undefined) {
+    return fail(
+      'invalid-usage',
+      `git push ${unsupportedFlag} 在当前版本中尚不支持（本版本一次推送一个分支）。`,
+    );
+  }
+
+  const parsed = parseRemoteRefArgs('push', args);
+  if (!parsed.ok) return fail('invalid-usage', parsed.error);
+
+  const command: PushCommand = { verb: 'push', all: false };
+  if (parsed.remote !== undefined) command.remote = parsed.remote;
+  if (parsed.branch !== undefined) command.branch = parsed.branch;
+  return { ok: true, command };
+}
+
+/** `git fetch [<remote>] [<branch>]`（M5b，服务 4-3「接收数据」） */
+function parseFetch(args: string[]): GrammarResult {
+  const parsed = parseRemoteRefArgs('fetch', args);
+  if (!parsed.ok) return fail('invalid-usage', parsed.error);
+
+  const command: FetchCommand = { verb: 'fetch' };
+  if (parsed.remote !== undefined) command.remote = parsed.remote;
+  if (parsed.branch !== undefined) command.branch = parsed.branch;
+  return { ok: true, command };
+}
+
+/** `git pull [<remote>] [<branch>]`（M5b，服务 4-3「接收数据」） */
+function parsePull(args: string[]): GrammarResult {
+  // `--rebase` 在笔记里出现过，但它需要 rebase 的冲突处理能力，属本版本范围外
+  const flag = args.find((arg) => isFlag(arg));
+  if (flag !== undefined) {
+    return fail('invalid-usage', `git pull 暂不支持选项 ${flag}（本版本为 fetch + merge）。`);
+  }
+
+  const parsed = parseRemoteRefArgs('pull', args);
+  if (!parsed.ok) return fail('invalid-usage', parsed.error);
+
+  const command: PullCommand = { verb: 'pull' };
+  if (parsed.remote !== undefined) command.remote = parsed.remote;
+  if (parsed.branch !== undefined) command.branch = parsed.branch;
+  return { ok: true, command };
 }
 

@@ -23,6 +23,7 @@ import gitBasicsRaw from '../../docs/notes/git-basics.md?raw'
 import gitBasicOperationsRaw from '../../docs/notes/git-basic-operations.md?raw'
 import gitBranchesRaw from '../../docs/notes/git-branches.md?raw'
 import gitUndoRaw from '../../docs/notes/git-undo.md?raw'
+import gitRemotesRaw from '../../docs/notes/git-remotes.md?raw'
 import { describe, expect, it } from 'vitest'
 import {
   CHAPTERS,
@@ -35,6 +36,7 @@ import {
 import { CHAPTER_1_LEVELS } from '../levels/chapters/ch1'
 import { CHAPTER_2_LEVELS } from '../levels/chapters/ch2'
 import { CHAPTER_3_LEVELS } from '../levels/chapters/ch3'
+import { CHAPTER_4_LEVELS } from '../levels/chapters/ch4'
 import { CHAPTER_5_LEVELS } from '../levels/chapters/ch5'
 import {
   IMPLEMENTED_TARGET_TYPES,
@@ -44,7 +46,9 @@ import {
   validateLevel,
 } from '../levels/schema'
 import { reset } from '../engine/sandbox'
-import { configureFs, type FsIdb } from '../engine/fs'
+import { configureFs, getFs, type FsIdb } from '../engine/fs'
+import { ALLOWED_REMOTE_URL } from '../engine/gitApi'
+import git from 'isomorphic-git'
 import { evaluateTargets } from '../game/validate/targetState'
 import { execute } from '../game/command/executor'
 import { LOG_PAGE_THIRD, STAGING_DRAFT_FINAL, UNIVERSE_BASE } from '../levels/presets'
@@ -59,6 +63,7 @@ const NOTES: Record<string, string> = {
   'git-basic-operations': gitBasicOperationsRaw,
   'git-branches': gitBranchesRaw,
   'git-undo': gitUndoRaw,
+  'git-remotes': gitRemotesRaw,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -116,6 +121,13 @@ const SLUG_BY_HEADING: Record<string, string> = {
   'reset-vs-revert': '### reset 三种模式',
   revert: '### revert 命令',
   reflog: '### 使用 reflog',
+  // 规则 B（git-remotes，M5b ch4）：标题即语义，slug 取英文关键词。
+  // ⚠️ 逐字标题必须与 docs/notes/git-remotes.md 完全一致。
+  'add-remote': '### 添加远程仓库',
+  push: '### 基本推送',
+  'fetch-pull': '### fetch vs pull',
+  clone: '## Fork 工作流',
+  'push-rejected': '### 推送被拒绝',
 }
 
 /** 读一篇笔记的正文；未登记时抛错（比静默返回空串更容易定位） */
@@ -192,10 +204,11 @@ describe('关卡数据 —— 第一章 id 与顺序', () => {
 
     expect(getFirstLevelOfChapter('ch1')?.id).toBe('ch1-1')
     // 尚未落地的章节如实返回空数组 / null，不伪造占位关卡（§14）
-    // —— M5a 起 ch5 已注册，仅 ch4（远程，M5b）与 ch6（标签，M6）为空
-    expect(getChapterLevels('ch4')).toEqual([])
-    expect(getFirstLevelOfChapter('ch4')).toBeNull()
+    // —— M5b 起 ch1~ch5 全部已注册，仅 ch6（标签，M6）与 F（综合终章）为空
     expect(getChapterLevels('ch6')).toEqual([])
+    expect(getFirstLevelOfChapter('ch6')).toBeNull()
+    expect(getChapterLevels('F')).toEqual([])
+    expect(getFirstLevelOfChapter('F')).toBeNull()
 
     expect(getAllLevels().map((level) => level.id)).toEqual([
       'ch1-1',
@@ -212,6 +225,11 @@ describe('关卡数据 —— 第一章 id 与顺序', () => {
       'ch3-4',
       'ch3-5',
       'ch3-6',
+      'ch4-1',
+      'ch4-2',
+      'ch4-3',
+      'ch4-4',
+      'ch4-5',
       'ch5-1',
       'ch5-2',
       'ch5-3',
@@ -221,20 +239,28 @@ describe('关卡数据 —— 第一章 id 与顺序', () => {
     ])
   })
 
-  it('章节元信息：M5a 起 ch1~ch3 与 ch5 可玩，综合挑战不参与主线排序', () => {
+  it('章节元信息：M5b 起 ch1~ch5 全部可玩，综合挑战不参与主线排序', () => {
     expect(getChapterMeta('ch1')?.playable).toBe(true)
     expect(getChapterMeta('ch1')?.order).toBe(1)
     expect(getChapterMeta('ch2')?.playable).toBe(true)
     expect(getChapterMeta('ch3')?.playable).toBe(true)
+    // M5b 落地第四章（远程章）—— 此前它是 `playable: false`
+    expect(getChapterMeta('ch4')?.playable).toBe(true)
+    expect(getChapterMeta('ch4')?.order).toBe(4)
     // M5a 落地第五章（撤销章）
     expect(getChapterMeta('ch5')?.playable).toBe(true)
     expect(getChapterMeta('ch5')?.order).toBe(5)
-    // ch4（远程，M5b）与 ch6（标签，M6）尚未落地
-    for (const id of ['ch4', 'ch6'] as ChapterId[]) {
+    // ch6（标签，M6）与 F（综合终章，M6）尚未落地
+    for (const id of ['ch6', 'F'] as ChapterId[]) {
       expect(getChapterMeta(id)?.playable).toBe(false)
     }
     expect(getChapterMeta('F')?.order).toBeNull()
     expect(getChapterMeta('ch4')?.title.length).toBeGreaterThan(0)
+
+    // `playable` 必须与「是否真有关卡」一致 —— 否则菜单会显示可玩却进不去
+    for (const meta of CHAPTERS) {
+      expect(meta.playable).toBe(getChapterLevels(meta.id).length > 0)
+    }
   })
 
   it('章名与 GDD §4 逐字一致（M5a 统一了此前的双轨命名）', () => {
@@ -319,18 +345,75 @@ describe('关卡数据 —— schema 校验', () => {
   it('schema 拒绝尚未落地的 init 字段（与 sandbox.reset 的 fail-fast 同一口径）', () => {
     const good = CHAPTER_1_LEVELS[0]
 
-    // M4 起 branches 已落地（分支关卡需要），名单只剩 tags / remotes / cloneSource
-    for (const init of [
-      { tags: [{ name: 'v1', at: 'abc' }] },
-      { remotes: [{ name: 'origin', url: 'x' }] },
-      { template: 'cloneSource' as const },
-    ]) {
-      const result = validateLevel({ ...good, init })
-      expect(result.ok).toBe(false)
-    }
+    // M4 起 branches 已落地、M5b 起 remotes / cloneSource 已落地，名单只剩 tags
+    const result = validateLevel({ ...good, init: { tags: [{ name: 'v1', at: 'abc' }] } })
+    expect(result.ok).toBe(false)
 
-    // branches 现在是合法字段，且带 name/from 的写法能过校验
+    // 以下三者现在都是合法字段
     expect(validateLevel({ ...good, init: { branches: [{ name: 'dev', from: 'main' }] } }).ok).toBe(true)
+    expect(validateLevel({ ...good, init: { template: 'cloneSource' } }).ok).toBe(true)
+    expect(validateLevel({ ...good, init: { remotes: [{ name: 'origin', url: 'http://sandbox/remote.git' }] } }).ok).toBe(true)
+  })
+
+  it('remotes 的 `at` 必须是本关真实存在的预置提交信息（跨字段校验）', () => {
+    // ⚠️ 不能拿 ch1-1 做样本 —— 它刻意不含预置提交（1-1 考的就是「从零 init」）。
+    //    改用**确实带预置提交**的关卡，取它第一条提交的信息作为合法引用。
+    const good = CHAPTER_5_LEVELS.find((level) => (level.init.commits ?? []).length > 0)
+    expect(good).toBeDefined()
+    if (!good) return
+
+    const commitMessage = good.init.commits?.[0]?.message ?? ''
+
+    // 引用本关真实存在的提交 → 通过
+    expect(
+      validateLevel({
+        ...good,
+        init: {
+          ...good.init,
+          remotes: [
+            {
+              name: 'origin',
+              url: 'http://sandbox/remote.git',
+              branches: [{ branch: 'main', at: commitMessage }],
+            },
+          ],
+        },
+      }).ok,
+    ).toBe(true)
+
+    // 引用一条**不存在**的提交 → 在编写期就拦下，而不是等玩家进关才炸
+    const bad = validateLevel({
+      ...good,
+      init: {
+        ...good.init,
+        remotes: [
+          {
+            name: 'origin',
+            url: 'http://sandbox/remote.git',
+            branches: [{ branch: 'main', at: '这条提交根本不存在' }],
+          },
+        ],
+      },
+    })
+    expect(bad.ok).toBe(false)
+    if (!bad.ok) {
+      expect(bad.errors.join('\n')).toContain('不是本关 init.commits 里的任何提交信息')
+    }
+  })
+
+  it('同名远程重复声明被拦下（会让 remote.<name>.url 被先后覆写）', () => {
+    const good = CHAPTER_1_LEVELS[0]
+    const result = validateLevel({
+      ...good,
+      init: {
+        ...good.init,
+        remotes: [
+          { name: 'origin', url: 'http://sandbox/remote.git' },
+          { name: 'origin', url: 'http://sandbox/remote.git' },
+        ],
+      },
+    })
+    expect(result.ok).toBe(false)
   })
 })
 
@@ -348,8 +431,9 @@ describe('关卡数据 —— targets 类型范围', () => {
   })
 
   it('IMPLEMENTED_TARGET_TYPES 与 UNIMPLEMENTED_TARGET_TYPES 互补且覆盖全部 11 种', () => {
-    expect(IMPLEMENTED_TARGET_TYPES).toHaveLength(9)
-    expect(UNIMPLEMENTED_TARGET_TYPES).toHaveLength(2)
+    // M5b 起 `remote` 已转正（第 4 章远程关卡），未实现名单只剩 `tag`（M6）
+    expect(IMPLEMENTED_TARGET_TYPES).toHaveLength(10)
+    expect(UNIMPLEMENTED_TARGET_TYPES).toHaveLength(1)
 
     const all = [...IMPLEMENTED_TARGET_TYPES, ...UNIMPLEMENTED_TARGET_TYPES]
     expect(new Set(all).size).toBe(11)
@@ -368,6 +452,7 @@ describe('关卡数据 —— targets 类型范围', () => {
         'headBranch',
         'logOrder',
         'merged',
+        'remote',
         'workdirClean',
       ].sort(),
     )
@@ -388,16 +473,15 @@ describe('关卡数据 —— targets 类型范围', () => {
 })
 
 describe('关卡数据 —— init 不使用未落地字段', () => {
-  it('4 关 init 均不含 branches / tags / remotes / cloneSource', () => {
-    // ⚠️ `sandbox.reset()` 对这些字段 fail-fast 报错（M1 刻意不伪造）。
+  it('4 关 init 均不含 tags（唯一仍未落地的字段，属 M6）', () => {
+    // ⚠️ `sandbox.reset()` 对 `tags` fail-fast 报错（刻意不伪造）。
     //   schema 已在校验期拦下，此处再对**实际数据**独立断言一次 ——
     //   两条防线都过，才能保证玩家不会进关时炸在 reset 上。
+    //   （M5b 起 `remotes` / `cloneSource` 已落地，不再是「未落地字段」；
+    //     第一章确实不使用它们，但那属于关卡设计而非实现能力，故不在此断言。）
     for (const level of CHAPTER_1_LEVELS) {
-      expect(level.init.branches ?? []).toEqual([])
       expect(level.init.tags ?? []).toEqual([])
-      expect(level.init.remotes ?? []).toEqual([])
-      expect(level.init.template).not.toBe('cloneSource')
-      expect(['blank', 'emptyRepo', undefined]).toContain(level.init.template)
+      expect(['blank', 'emptyRepo', 'cloneSource', undefined]).toContain(level.init.template)
     }
   })
 
@@ -410,8 +494,15 @@ describe('关卡数据 —— init 不使用未落地字段', () => {
       await freshSandbox(level.init)
       // 重置后必定已 init —— 这也正是「`.git` 存在」不能用作目标的原因
       expect((await fsp.stat('/repo/.git')).isDirectory()).toBe(true)
-      // `/remote.git` 由 ensureSandboxRoot 一并建立（第四章远程关卡用）
-      expect(await fsp.readdir('/remote.git')).toEqual([])
+      // `/remote.git` 自 M5b 起是**真实裸仓**（不再是空目录）：
+      // `sandbox.reset` 每关都会重建它，使上一关的远程分支不会残留到本关。
+      const remoteEntries = await fsp.readdir('/remote.git')
+      expect(remoteEntries).toContain('HEAD')
+      expect(remoteEntries).toContain('objects')
+      // 且必须是干净的 —— 第一章的关卡不预置任何远程内容
+      await expect(
+        git.listBranches({ fs: getFs(), dir: '/remote.git', gitdir: '/remote.git' }),
+      ).resolves.toEqual([])
     }
   })
 })
@@ -550,6 +641,8 @@ describe('关卡数据 —— relatedKnowledge 反查笔记', () => {
       ['git-branches', headingsOf('git-branches')],
       // M5a：第五章接入 git-undo 笔记
       ['git-undo', headingsOf('git-undo')],
+      // M5b：第四章接入 git-remotes 笔记
+      ['git-remotes', headingsOf('git-remotes')],
     ])
 
     for (const [slug, heading] of Object.entries(SLUG_BY_HEADING)) {
@@ -681,8 +774,8 @@ describe('关卡数据 —— 第二、三章 id 与注册', () => {
     expect(getChapterLevels('ch2')).toHaveLength(4)
     expect(getChapterLevels('ch3')).toHaveLength(6)
     expect(getLevel('ch3-4')?.title).toBe('冲突消解')
-    // getAllLevels 覆盖 ch1~ch3 与 ch5 共 20 关（ch4 属 M5b、ch6/F 属 M6）
-    expect(getAllLevels()).toHaveLength(20)
+    // getAllLevels 覆盖 ch1~ch5 共 25 关（ch6/F 属 M6）
+    expect(getAllLevels()).toHaveLength(25)
   })
 
   it('输入模式：ch2 全部拼接（menu），ch3 全部半拼（half）', () => {
@@ -1014,11 +1107,9 @@ describe('关卡数据 —— 第五章 schema 与命令集约束', () => {
     }
   })
 
-  it('ch5 的 init 不含未落地字段（tags / remotes / cloneSource 属 M5b/M6）', () => {
+  it('ch5 的 init 不含未落地字段（仅 tags 仍属 M6）', () => {
     for (const level of CHAPTER_5_LEVELS) {
       expect(level.init.tags ?? []).toEqual([])
-      expect(level.init.remotes ?? []).toEqual([])
-      expect(level.init.template).not.toBe('cloneSource')
     }
   })
 
@@ -1202,5 +1293,389 @@ describe('关卡数据 —— 第五章可解性（真实引擎走通）', () =>
 
     // ④ 完整剧本走完，关卡目标满足
     expect((await evaluateTargets(level)).satisfied).toBe(true)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 第四章「星际连接」（M5b）
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// ⚠️ 本章的可解性用例与前几章有一个本质差别：**关卡包含真实的远程交互**。
+//    因此这些用例不只断言「目标达成」，还要断言**远程宇宙的真实状态** ——
+//    否则「push 其实是空操作」「fetch 什么都没取回」这类缺陷会被目标判定掩盖
+//    （目标只锚定本地结果，远程一致性必须另行验证）。
+
+describe('关卡数据 —— 第四章 id / 注册 / 输入模式', () => {
+  it('ch4 已注册：章节 playable 且 5 关可达、顺序正确', () => {
+    expect(getChapterMeta('ch4')?.playable).toBe(true)
+    expect(getChapterLevels('ch4').map((level) => level.id)).toEqual([
+      'ch4-1',
+      'ch4-2',
+      'ch4-3',
+      'ch4-4',
+      'ch4-5',
+    ])
+    expect(getFirstLevelOfChapter('ch4')?.id).toBe('ch4-1')
+  })
+
+  it('ch4 关卡名与 GDD §4 逐字一致', () => {
+    const expected: Record<string, string> = {
+      'ch4-1': '建立航道',
+      'ch4-2': '传送数据',
+      'ch4-3': '接收数据',
+      'ch4-4': '克隆宇宙',
+      'ch4-5': '协作冲突',
+    }
+    for (const level of CHAPTER_4_LEVELS) {
+      expect(level.title, level.id).toBe(expected[level.id])
+    }
+  })
+
+  it('ch4 全部为半拼（half）并提供骨架（GDD §3.2：三~四章半拼）', () => {
+    for (const level of CHAPTER_4_LEVELS) {
+      expect(level.inputMode, level.id).toBe('half')
+      expect(level.halfSkeleton, level.id).toBeDefined()
+      expect(level.halfSkeleton?.startsWith('git ')).toBe(true)
+    }
+  })
+
+  it('ch4 难度按 GDD：4-1~4-4 为 ★★★，4-5 为 ★★★★★', () => {
+    const expected: Record<string, number> = {
+      'ch4-1': 3,
+      'ch4-2': 3,
+      'ch4-3': 3,
+      'ch4-4': 3,
+      'ch4-5': 5,
+    }
+    for (const level of CHAPTER_4_LEVELS) {
+      expect(level.difficulty, level.id).toBe(expected[level.id])
+    }
+  })
+})
+
+describe('关卡数据 —— 第四章 schema 与远程配置约束', () => {
+  it('5 关全部通过 validateLevel 校验', () => {
+    for (const level of CHAPTER_4_LEVELS) {
+      const result = validateLevel(level)
+      if (!result.ok) {
+        throw new Error(`${level.id} 校验失败：\n- ${result.errors.join('\n- ')}`)
+      }
+    }
+  })
+
+  it('ch4 的目标类型全部落在已实现范围内（M5b 起含 remote）', () => {
+    for (const level of CHAPTER_4_LEVELS) {
+      for (const target of level.targets) {
+        expect(IMPLEMENTED_TARGET_TYPES, `${level.id} 的 ${target.type}`).toContain(target.type)
+        expect(UNIMPLEMENTED_TARGET_TYPES).not.toContain(target.type)
+      }
+    }
+  })
+
+  it('ch4 的 init 不含未落地字段（仅 tags 仍属 M6）', () => {
+    for (const level of CHAPTER_4_LEVELS) {
+      expect(level.init.tags ?? []).toEqual([])
+    }
+  })
+
+  it('ch4 的 init 预置满足「每个提交都有 files」（M3 空提交防御的关卡侧约束）', () => {
+    for (const level of CHAPTER_4_LEVELS) {
+      for (const [index, commit] of (level.init.commits ?? []).entries()) {
+        expect(
+          Object.keys(commit.files ?? {}).length,
+          `${level.id} 的第 ${index + 1} 个预置提交没有 files`,
+        ).toBeGreaterThan(0)
+      }
+    }
+  })
+
+  it('ch4 的远程地址统一使用沙箱白名单地址（不手写漂移）', () => {
+    for (const level of CHAPTER_4_LEVELS) {
+      for (const remote of level.init.remotes ?? []) {
+        expect(remote.url, `${level.id} 的远程 ${remote.name}`).toBe(ALLOWED_REMOTE_URL)
+      }
+    }
+  })
+
+  it('ch4 的 remotes[].branches[].at 都能在 init.commits 里找到（跨字段一致性）', () => {
+    for (const level of CHAPTER_4_LEVELS) {
+      const messages = new Set(
+        (level.init.commits ?? []).map((commit) => (commit.message || commit.msg).trim()),
+      )
+      for (const remote of level.init.remotes ?? []) {
+        for (const entry of remote.branches ?? []) {
+          expect(
+            messages.has(entry.at.trim()),
+            `${level.id}：远程分支 ${entry.branch} 引用了不存在的提交「${entry.at}」`,
+          ).toBe(true)
+        }
+      }
+    }
+  })
+
+  it('ch4 的 relatedKnowledge 与核定映射一致（显式期望值，防漂移）', () => {
+    const expected: Record<string, string[]> = {
+      'ch4-1': ['git-remotes#add-remote'],
+      'ch4-2': ['git-remotes#push'],
+      'ch4-3': ['git-remotes#fetch-pull'],
+      'ch4-4': ['git-remotes#clone'],
+      'ch4-5': ['git-remotes#push-rejected'],
+    }
+    for (const level of CHAPTER_4_LEVELS) {
+      expect(level.relatedKnowledge).toEqual(expected[level.id])
+    }
+  })
+
+  it('ch4 的每个 slug 都能在 git-remotes 笔记里反查到真实小节', () => {
+    for (const level of CHAPTER_4_LEVELS) {
+      for (const id of level.relatedKnowledge) {
+        const { note, slug } = splitKnowledgeId(id)
+        expect(note).toBe('git-remotes')
+        const heading = SLUG_BY_HEADING[slug]
+        expect(heading, `slug ${slug} 未登记在 SLUG_BY_HEADING`).toBeDefined()
+        expect(
+          headingsOf(note).has(heading),
+          `${id} → "${heading}" 不在 docs/notes/${note}.md 中`,
+        ).toBe(true)
+      }
+    }
+  })
+})
+
+describe('关卡数据 —— 第四章可解性（真实引擎 + 真实远程协议）', () => {
+  let caseIndexM5b = 0
+  async function freshSandboxM5b(init: Level['init'] = {}): Promise<void> {
+    caseIndexM5b += 1
+    configureFs({ name: `levels-m5b-${Date.now()}-${caseIndexM5b}`, backend: new MemoryBackend() })
+    const result = await reset(init)
+    if (!result.ok) throw new Error(`沙箱初始化失败：${result.error.toString()}`)
+  }
+
+  /** 读裸仓某分支的 oid（用于断言「远程真的变了」） */
+  async function bareBranchOid(branch: string): Promise<string | null> {
+    const fs = getFs()
+    try {
+      return await git.resolveRef({
+        fs,
+        dir: '/remote.git',
+        gitdir: '/remote.git',
+        ref: `refs/heads/${branch}`,
+      })
+    } catch {
+      return null
+    }
+  }
+
+  it('5 关开局不得即达标', async () => {
+    for (const level of CHAPTER_4_LEVELS) {
+      await freshSandboxM5b(level.init)
+      const state = await evaluateTargets(level)
+      const done = state.results.filter((result) => result.ok)
+      if (done.length !== 0) {
+        throw new Error(
+          `${level.id} 开局就已有 ${done.length} 项达标：` +
+            done.map((r) => `${r.target.type}（${r.detail}）`).join('、'),
+        )
+      }
+    }
+  })
+
+  it('远程宇宙每关都被重建：上一关的分支不会残留到下一关', async () => {
+    // 先在 4-2 里推一次，让裸仓有 main
+    await freshSandboxM5b(assertValidLevel(getLevel('ch4-2')).init)
+    await execute('git push origin main')
+    expect(await bareBranchOid('main')).not.toBeNull()
+
+    // 再进 4-4（远程只有「宇宙档案基线」）——不应看到上一关的痕迹
+    const level44 = assertValidLevel(getLevel('ch4-4'))
+    await freshSandboxM5b(level44.init)
+    const branches = await git.listBranches({
+      fs: getFs(),
+      dir: '/remote.git',
+      gitdir: '/remote.git',
+    })
+    // 4-4 预置的远程 main 指向「宇宙档案基线」
+    expect(branches).toEqual(['main'])
+  })
+
+  it('4-1 走参考解法（remote add）后过关，且远程关联真实写入配置', async () => {
+    const level = assertValidLevel(getLevel('ch4-1'))
+    await freshSandboxM5b(level.init)
+
+    const added = await execute(`git remote add origin ${ALLOWED_REMOTE_URL}`)
+    expect(added.ok).toBe(true)
+
+    // 配置里真的有这一条（不只是目标判定说它有）
+    const listed = await execute('git remote -v')
+    expect(listed.output.join('\n')).toContain('origin')
+
+    expect((await evaluateTargets(level)).satisfied).toBe(true)
+  })
+
+  it('4-2 走参考解法（补一条观测 + push）后过关，且**裸仓真的收到了那些提交**', async () => {
+    const level = assertValidLevel(getLevel('ch4-2'))
+    await freshSandboxM5b(level.init)
+
+    // push 之前：远程 main 停在「待传送观测·其一」（预置的远程分支）
+    const before = await bareBranchOid('main')
+    expect(before).not.toBeNull()
+
+    // 参考解法：归档预置的未追踪观测 → push
+    expect((await execute('git add .')).ok).toBe(true)
+    expect((await execute('git commit -m "待传送观测归档"')).ok).toBe(true)
+
+    const pushed = await execute('git push origin main')
+    expect(pushed.ok).toBe(true)
+
+    // push 之后：远程 main 已推进到「待传送观测·其二」（本地 HEAD）
+    const after = await bareBranchOid('main')
+    expect(after).not.toBe(before)
+
+    const head = await git.resolveRef({ fs: getFs(), dir: '/repo', ref: 'HEAD' })
+    expect(after).toBe(head)
+
+    // 裸仓里能读到新提交的信息 —— 证明对象真的搬过去了
+    const { commit } = await git.readCommit({
+      fs: getFs(),
+      dir: '/remote.git',
+      gitdir: '/remote.git',
+      oid: after as string,
+    })
+    expect(commit.message.trim()).toBe('待传送观测归档')
+
+    expect((await evaluateTargets(level)).satisfied).toBe(true)
+  })
+
+  it('4-3 走参考解法（pull）后过关，且远程的观测真的进入了本地历史', async () => {
+    const level = assertValidLevel(getLevel('ch4-3'))
+    await freshSandboxM5b(level.init)
+
+    // pull 之前：本地历史里没有远程那条
+    const before = await execute('git log --oneline')
+    expect(before.output.join('\n')).not.toContain('远程新观测')
+    expect((await evaluateTargets(level)).satisfied).toBe(false)
+
+    const pulled = await execute('git pull origin main')
+    expect(pulled.ok).toBe(true)
+
+    // pull 之后：远程的提交出现在本地历史，且工作区里有了它的文件
+    const after = await execute('git log --oneline')
+    expect(after.output.join('\n')).toContain('远程新观测')
+    expect((await execute('git status -s')).ok).toBe(true)
+
+    const { fsp } = await import('../engine/fs')
+    const content = await fsp.readFile('/repo/notes/远程观测.md', 'utf8')
+    expect(content).toContain('远程观测 · 新记录')
+
+    expect((await evaluateTargets(level)).satisfied).toBe(true)
+  })
+
+  it('4-3 只 fetch 不合并不足以过关（教学点的判据锁）', async () => {
+    const level = assertValidLevel(getLevel('ch4-3'))
+    await freshSandboxM5b(level.init)
+
+    const fetched = await execute('git fetch origin')
+    expect(fetched.ok).toBe(true)
+
+    // fetch 只更新远程跟踪引用，本地历史不变 → 目标仍未达成
+    const log = await execute('git log --oneline')
+    expect(log.output.join('\n')).not.toContain('远程新观测')
+    expect((await evaluateTargets(level)).satisfied).toBe(false)
+
+    // 补上 merge 即过关 —— 与提示语给出的两条路径一致
+    await execute('git merge origin/main')
+    expect((await evaluateTargets(level)).satisfied).toBe(true)
+  })
+
+  it('4-4 走参考解法（clone）后过关，且工作区真的有 README', async () => {
+    const level = assertValidLevel(getLevel('ch4-4'))
+    await freshSandboxM5b(level.init)
+
+    // clone 之前：/repo 是空的（cloneSource 模板）—— 初生仓库没有任何提交
+    const before = await execute('git log --oneline')
+    expect(before.output.join('')).toBe('')
+
+    const cloned = await execute(`git clone ${ALLOWED_REMOTE_URL}`)
+    expect(cloned.ok).toBe(true)
+
+    const { fsp: fspClone } = await import('../engine/fs')
+    const readme = await fspClone.readFile('/repo/README.md', 'utf8')
+    expect(readme).toContain('宇宙档案')
+
+    // 历史也完整取回
+    const log = await execute('git log --oneline')
+    expect(log.output.join('\n')).toContain('宇宙档案基线')
+
+    expect((await evaluateTargets(level)).satisfied).toBe(true)
+  })
+
+  it('4-5 走完整剧本：push 被拒 → fetch → merge → push，最终双方都在', async () => {
+    const level = assertValidLevel(getLevel('ch4-5'))
+    await freshSandboxM5b(level.init)
+
+    // ① 直接推送**必须被拒**（远程领先，非快进）—— 这正是本关的教学起点
+    const rejected = await execute('git push origin main')
+    expect(rejected.ok).toBe(false)
+    expect(rejected.error).toContain('推送被远程拒绝')
+
+    // 被拒之后远程没有被污染：仍是「他人传送的观测」
+    const remoteOid = await bareBranchOid('main')
+    const { commit: remoteCommit } = await git.readCommit({
+      fs: getFs(),
+      dir: '/remote.git',
+      gitdir: '/remote.git',
+      oid: remoteOid as string,
+    })
+    expect(remoteCommit.message.trim()).toBe('他人传送的观测')
+
+    // 此时目标未达成（本地还看不到别人的观测）
+    expect((await evaluateTargets(level)).satisfied).toBe(false)
+
+    // ② 取回别人的观测
+    const fetched = await execute('git fetch origin')
+    expect(fetched.ok).toBe(true)
+
+    // ③ 与自己的时间线合流
+    const merged = await execute('git merge origin/main')
+    expect(merged.ok).toBe(true)
+
+    // ④ 再推送 —— 这次成功
+    const pushed = await execute('git push origin main')
+    expect(pushed.ok).toBe(true)
+
+    // 双方的观测都在本地历史里
+    const log = await execute('git log --oneline')
+    expect(log.output.join('\n')).toContain('他人传送的观测')
+    expect(log.output.join('\n')).toContain('协作基线观测')
+
+    // 远程也收到了合并后的历史
+    const finalRemote = await bareBranchOid('main')
+    const head = await git.resolveRef({ fs: getFs(), dir: '/repo', ref: 'HEAD' })
+    expect(finalRemote).toBe(head)
+
+    expect((await evaluateTargets(level)).satisfied).toBe(true)
+  })
+
+  it('4-5 判据锚定「远程的观测已进入本地历史」（开局不成立）', async () => {
+    const level = assertValidLevel(getLevel('ch4-5'))
+    await freshSandboxM5b(level.init)
+
+    // 开局：本地看不到别人的观测 → 核心判据不成立
+    const start = await evaluateTargets(level)
+    const existsTarget = start.results.find((r) => r.target.type === 'commitExists')
+    expect(existsTarget?.ok).toBe(false)
+
+    // ⚠️ 已知边界（记入 M5-tasks.md「设计缺口」）：目标锚定**本地**结果，
+    //    「push 成功与否」不在判据内（无对应 target 类型，决策 ⑤ 不改 11 种类型）。
+    //    故 fetch + merge 即可满足判据 —— 本用例把该边界显式锁住，
+    //    避免日后误以为判定覆盖了推送。
+    await execute('git fetch origin')
+    await execute('git merge origin/main')
+
+    // ⚠️ 本关的远程与本地在「协作基线观测」处同源，故 fetch+merge 是**快进**：
+    //    本地 HEAD 会直接落到远程那条上，两者头相同 —— 这不是「push 成功了」，
+    //    而是快进合并的自然结果（远程并未被写入）。
+    //    要证明「没有 push」，看的不是头相同，而是**远程的对象库里没有本地新增的提交**。
+    expect((await evaluateTargets(level)).satisfied).toBe(true) // 判据已满足
   })
 })

@@ -272,12 +272,13 @@ describe('executor —— 错误路径', () => {
     expect(result.error).toContain('需要跟上子命令');
   });
 
-  it('白名单外仍不支持的子命令返回「该版本不支持」而非执行（M5a 已实现 reset/restore/revert/reflog）', async () => {
-    // M5a 把第五章的 reset / restore / revert / reflog 转正后，白名单外仍剩
-    // stash / tag / remote / push / fetch / pull（tag 属 M6，远程属 M5b）。
-    // ⚠️ 原用例的输入集合含 `git reset` 与 `git revert HEAD` —— M5a 起两者已转正，
-    //    不再报「不支持」（`git reset` 无目标时改报「请指定要回退到的目标」），故收缩之。
-    for (const input of ['git stash', 'git tag v1.0', 'git push origin main', 'git fetch']) {
+  it('白名单外仍不支持的子命令返回「该版本不支持」而非执行（M5b 已实现 remote/clone/push/fetch/pull）', async () => {
+    // M5a 转正了第五章的 reset / restore / revert / reflog，
+    // M5b 转正了第四章的 remote / clone / push / fetch / pull —— 白名单外只剩
+    // stash（决策 ④ 明确不做）与 tag（属 M6）。
+    // ⚠️ 历次转正都需收缩本用例的输入集合：转正后的命令不再报「不支持」，
+    //    而是给出各自的用法提示（见紧随其后的 `git reset` 用例）。
+    for (const input of ['git stash', 'git tag v1.0', 'git stash pop']) {
       const result = await execute(input, { dir });
       expect(result.ok).toBe(false);
       expect(result.error).toContain('在当前版本中尚不支持');

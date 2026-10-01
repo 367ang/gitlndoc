@@ -60,10 +60,18 @@ const H = require('./cdp-client.cjs');
   await H.runAdd('.');
   await H.runCommit('"第一环：链条起点"');
   // 第一环后目标未全达成（commitCount>=2）→ 仍在关卡页
+  //
+  // ⚠️ 判据改为**数命令历史面板的 DOM**，不再 `import('/src/store/sessionStore.ts')`
+  //    读 store（M5b 实测：经 CDP 的 dynamic import 拿到的**不是应用正在用的模块实例**，
+  //    其 history 恒为 0，断言会稳定假失败）。渲染结果才是可靠的事实来源。
+  // ⚠️ 结构：`$` 是独立 span，在 innerText 里**独占一行**，命令文本在其下一行。
+  //    故「数 git commit 条数」= 数那些**紧跟在 `$` 行之后**的 `git commit` 行。
   const firstRingDone = await H.evalJs(
-    `(async () => {
-      const m = await import('/src/store/sessionStore.ts');
-      return m.useSessionStore.getState().history.filter(e => e.ok && e.input.startsWith('git commit')).length;
+    `(() => {
+      const probe = document.querySelector('[data-testid="command-history"]');
+      const scope = probe ?? document.body;
+      const lines = scope.innerText.split('\\n').map((l) => l.trim());
+      return lines.filter((l, i) => l.startsWith('git commit') && lines[i - 1] === '$').length;
     })()`,
   );
   H.check('1-4 第一环归档（1 commit）', firstRingDone === 1, `commits=${firstRingDone}`);

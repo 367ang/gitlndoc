@@ -51,6 +51,8 @@ import { useFileTree } from '../ui/components/fileTree/useFileTree'
 import { execute } from '../game/command/executor'
 import { getUnlockedHints } from '../game/validate/stepHints'
 import { CHAPTER_1_LEVELS } from '../levels/chapters/ch1'
+import { CHAPTER_2_LEVELS } from '../levels/chapters/ch2'
+import { CHAPTER_3_LEVELS } from '../levels/chapters/ch3'
 import type { TargetResult } from '../game/validate/targetState'
 import type { Level, TargetCondition } from '../game/types'
 
@@ -154,6 +156,11 @@ describe('拼接式输入 —— 片段追加与槽位语义（纯函数）', ()
     //   现行设计为「起始词只承载 git，子命令独立成段」，本用例用穷举把这条性质锁住。
     const pool = fragmentsForLevel(CHAPTER_1_LEVELS[0])
 
+    // ⚠️ 遍历深度 3 是**刻意的**（原为 4）：该性质只在「相邻两步」的尺度上成立
+    //    （重复 token 必然由连续两次点击产生），深度 3 足以覆盖全部两步组合
+    //    并留一层余量。而 M5b 给共享的 slot0 表补了 5 个命令组后池子从 12 涨到 23，
+    //    深度 4 的组合数随之涨到原来的 ~13 倍，单测直接超时（实测 5s 超时）。
+    //    收窄深度而非放宽断言 —— 被验证的性质一字未改。
     const walk = (draft: Draft, depth: number, visit: (text: string) => void): void => {
       visit(renderDraft(draft))
       if (depth === 0) return
@@ -163,7 +170,7 @@ describe('拼接式输入 —— 片段追加与槽位语义（纯函数）', ()
     }
 
     const texts: string[] = []
-    walk(EMPTY_DRAFT, 4, (text) => {
+    walk(EMPTY_DRAFT, 3, (text) => {
       if (text.length > 0) texts.push(text)
     })
     expect(texts.length).toBeGreaterThan(0)
@@ -1052,15 +1059,30 @@ describe('components —— M4 半拼骨架预填与章节解锁', () => {
   it('MenuScreen 未解锁章节显示 🔒 且按钮禁用（通关上一章全部关卡后解锁）', () => {
     useProgressStore.setState({ levelRecords: {}, achievements: [] })
     render(<MenuScreen />)
-    // ch1 恒解锁；ch2/ch3/ch5 因前置章未通关而锁
-    // ⚠️ M5a 起 ch5 已注册且 playable —— 它同样处于「未解锁」态，故文案出现 **3** 次
-    //    （原为 2 次；ch4/ch6 尚未 playable，不渲染锁定文案）。
-    expect(screen.getAllByText(/🔒 完成上一章全部关卡后解锁/)).toHaveLength(3)
+    // ch1 恒解锁；ch2/ch3/ch4/ch5 因前置章未通关而锁
+    // ⚠️ M5a 起 ch5 已注册且 playable、**M5b 起 ch4 亦然** —— 两者都处于「未解锁」态，
+    //    故文案出现 **4** 次（M4 为 2 次、M5a 为 3 次；ch6/F 尚未 playable，不渲染锁定文案）。
+    expect(screen.getAllByText(/🔒 完成上一章全部关卡后解锁/)).toHaveLength(4)
     // ch2 的开始按钮被禁用
     const ch2Start = screen.getByLabelText('直接开始 ch2-1 状态感知')
     expect(ch2Start).toBeDisabled()
     // ch1 的开始按钮可用
     expect(screen.getByLabelText('直接开始 ch1-1 时间线初始化')).toBeEnabled()
+  })
+
+  it('ch1~ch3 全通关 → ch4 解锁（M5b 起远程章进入主线）', () => {
+    const records: Record<string, { score: number; stars: number; cleared: boolean }> = {}
+    for (const chapter of [CHAPTER_1_LEVELS, CHAPTER_2_LEVELS, CHAPTER_3_LEVELS]) {
+      for (const level of chapter) {
+        records[level.id] = { score: 100, stars: 3, cleared: true }
+      }
+    }
+    useProgressStore.setState({ levelRecords: records, achievements: [] })
+    render(<MenuScreen />)
+
+    expect(screen.getByLabelText('直接开始 ch4-1 建立航道')).toBeEnabled()
+    // ch5 现在要求 ch4 全通关（M5a 期间它跳过 ch4 直取 ch3，M5b 起不再如此）
+    expect(screen.getByLabelText('直接开始 ch5-1 修正笔误')).toBeDisabled()
   })
 
   it('ch1 全通关 → ch2 解锁（按钮可用）', () => {

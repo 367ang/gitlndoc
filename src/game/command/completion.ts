@@ -13,7 +13,7 @@
  * 只在光标位于行尾（最后一个 token）时生效 —— 中途补全会把命令搅乱。
  */
 
-/** 命令补全白名单：动词 + 高频旗标（M4 子命令全集） */
+/** 命令补全白名单：动词 + 高频旗标（M5b 子命令全集） */
 export const COMPLETION_WORDS: readonly string[] = [
   'init',
   'add',
@@ -27,14 +27,32 @@ export const COMPLETION_WORDS: readonly string[] = [
   'merge',
   'rebase',
   'rm',
+  // M5a：第五章「时空回溯」
+  'reset',
+  'restore',
+  'revert',
+  'reflog',
+  // M5b：第四章「星际连接」
+  'remote',
+  'clone',
+  'push',
+  'fetch',
+  'pull',
+  'origin',
   '-m',
   '-s',
   '-b',
   '-c',
+  '-v',
   '--staged',
   '--oneline',
   '--all',
   '--cached',
+  '--soft',
+  '--mixed',
+  '--hard',
+  '--amend',
+  '--no-edit',
   '.',
 ];
 

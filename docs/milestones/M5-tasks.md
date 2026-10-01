@@ -1,6 +1,6 @@
 # M5 任务：撤销与远程、快照持久化（拆分为 M5a / M5b）
 
-> 状态：**M5a DONE**（第五章 + 快照持久化 + 刷新恢复，含二次增补）；**M5b 待启动**
+> 状态：**M5a DONE**（第五章 + 快照持久化 + 刷新恢复，含二次增补）；**M5b DONE**（第四章 + 本地远程客户端）。**M5 全量交付。**
 > 依据：`development-refinement.md` §4/§6/§8/§10/§13/§14（M5 定义）、`game-design.md` §4（第 4–5 章关卡表）、
 > §6.5（持久化）、§10（`reset --hard` 沙箱可恢复裁定）、`docs/milestones/M4-tasks.md`「遗留与移交」。
 > **动 `engine/` 前务必先读 M2 §4、M3、M4 的「实测环境事实」。**
@@ -59,7 +59,7 @@
 | 批次 | 内容 | 产出 | 状态 |
 |---|---|---|---|
 | **M5a** | 第五章 6 关（`reset` 三模式 / `restore` / `commit --amend` / `revert` / `reflog`）+ 快照持久化（§10）+ **刷新自动恢复中途进度** | 撤销章可玩；进度与仓库快照跨刷新存活；刷新后回到原关卡继续玩 | ✅ 完成 |
-| **M5b** | 第四章 5 关（`remote add` / `push` / `fetch`/`pull` / `clone` / 协作冲突）+ 本地远程客户端 | 远程章可玩；M5 全量交付 | ⏳ 待启动 |
+| **M5b** | 第四章 5 关（`remote add` / `push` / `fetch`/`pull` / `clone` / 协作冲突）+ 本地远程客户端 | 远程章可玩；M5 全量交付 | ✅ 完成 |
 
 **为什么这样切**：M5a 的依赖全部在仓库内（isomorphic-git 原语 + 浏览器 Storage），
 可独立跑完三门禁与冒烟；M5b 需要新写协议客户端并让 `/remote.git` 真正参与，
@@ -194,22 +194,155 @@ revert 断言「树内容回到目标提交之前、历史向前增长」。
 - [x] 6.4 文档收尾：本文件「执行结果」补全 + `docs/milestones/README.md` 索引行 +
   `AGENTS.md`「当前状态」同步。
 
-## 三、M5b 任务拆解（待 M5a 交付后展开）
+## 三、M5b 任务拆解
 
-- [ ] R1 `engine/fileRemote.ts`：内存裸仓库（`git.init({ bare: true })` + 导出 `.git` 文件树，
-  探针 5 已验证 7 个文件 1 次写入可行）+ 最小 Git 智能 HTTP 客户端
-  （`GET /info/refs?service=git-upload-pack`、`POST /git-upload-pack`、
-  `POST /git-receive-pack`；复用 isomorphic-git 的 `packObjects` / `indexPack` 原语）。
-- [ ] R2 `gitApi`：`addRemote` / `listRemotes` / `deleteRemote` / `clone` / `push` / `fetch` / `pull`。
+> **M5b 开工前的协议探针已完成**（见本节末「附：M5b 实测协议事实」）——
+> 结论是**架构性**的：isomorphic-git 的 `fetch` / `push` / `clone` 都接受自定义
+> `http` 客户端，且完整实现了 Git 智能 HTTP 的**客户端**侧。因此 M5b **不需要重写协议
+> 编解码器**，只需提供一个**进程内 http 客户端**把标准协议请求路由到内存裸仓库。
+> 这比原估的工作量小得多，且仍是「真协议、真 packfile」的真实执行（不违反 §14）。
+
+- [x] R1 `engine/fileRemote.ts`：内存裸仓库 + **进程内 smart-HTTP 服务端**
+  （advertisement / upload-pack / receive-pack 三个端点），复用 `packObjects` / `indexPack`。
+  探针已钉死全部报文格式细节，见本节末「附：M5b 实测协议事实」。
+- [x] R2 `gitApi`：`addRemote` / `listRemotes` / `deleteRemote` / `clone` / `push` / `fetch` / `pull`。
   - URL 白名单（决策 ③）；本地路径直连快速路径可选（**须与协议路径共享同一套语义**，
     不得让两条路径行为分叉）。
-- [ ] R3 `sandbox`：落地 `LevelInit.remotes` 与 `template: 'cloneSource'`
+- [x] R3 `sandbox`：落地 `LevelInit.remotes` 与 `template: 'cloneSource'`
   （删掉 `assertSupportedScope` 的 deferred fail-fast），`/remote.git` 每关重建。
-- [ ] R4 `targetState`：`remote` 目标类型转正；`schema.ts` 两份名单同步（9+2 → 10+1）。
-- [ ] R5 `ch4.ts` 5 关 + 章节注册 + 笔记接入（`git-remotes.md`）
+- [x] R4 `targetState`：`remote` 目标类型转正；`schema.ts` 两份名单同步（9+2 → 10+1）。
+- [x] R5 `ch4.ts` 5 关 + 章节注册 + 笔记接入（`git-remotes.md`）
   + 4-5「协作冲突」的剧本设计（多人推送冲突 = 远程领先时 push 被拒 → fetch → 合并 → push）。
-- [ ] R6 `grammar`/`executor`/`completion` 的远程命令接线 + `undoable` 复核。
-- [ ] R7 测试与验收：`run-ch4.cjs` 冒烟 + 三门禁 + M5 全量文档收尾。
+  - **4-5 判定口径（用户裁定 A）**：**服务器端真拒绝**（真 non-fast-forward），
+    而非用现有 target 组合软化表达。引擎依据见「附」第 10 条（`PushRejectedError` 实测可用）。
+    判据用现有 target 组合锚定**结果**（远程与本地都含两方提交、工作区干净等），
+    不新增 `TargetCondition` 类型 —— 与 M5a 决策 ⑤ 的纪律一致（11 种维持不变）。
+- [x] R6 `grammar`/`executor`/`completion` 的远程命令接线 + `undoable` 复核。
+- [x] R7 测试与验收：`run-ch4.cjs` 冒烟 + 三门禁 + M5 全量文档收尾。
+
+### 附：M5b 实测协议事实（开工前探针，Lead 记录）
+
+全部在真实 isomorphic-git **1.42.2** + LightningFS `MemoryBackend` 上实测，非推断。
+探针脚本为一次性验证，跑完即删（结论在此留档）。
+
+**B1–B4 内存裸仓库**
+
+1. **`git.init({ bare: true })` 可用**：产出 `hooks/ info/ objects/ refs/ config HEAD` 六条目
+   （`hooks`/`info`/`objects/info`/`objects/pack`/`refs/heads`/`refs/tags` 为空目录），
+   递归遍历与 `readdir`/`stat` 均正常。原探针 5 记的「7 个文件」是**含对象文件**的场景，
+   空裸仓本身只有 `config` + `HEAD` 两个文件。
+2. ⚠️ **`indexPack` 的 `filepath` 必须是相对 `dir` 的路径**（本里程碑最隐蔽的坑）：
+   其内部无条件 `join(dir, filepath)`，传绝对路径 `/remote.git/objects/pack/p.pack`
+   会被拼成 `/remote.git/remote.git/objects/pack/p.pack`，再经 `FileSystem.read()`
+   **把 ENOENT 静默吞成 `null`**（`index.cjs:5345` 的 `catch { return null }`），
+   最终在 `pack.slice(-20)` 处抛 `TypeError: Cannot read properties of null`。
+   报错信息完全指不到真因 —— **调用时必须传 `objects/pack/<name>.pack` 这样的相对路径**。
+3. **对象搬迁全链路可行**：`packObjects({ oids })` → 写入裸仓 `objects/pack/` →
+   `indexPack({ filepath: 相对路径 })` → `writeRef`，随后裸仓的 `readCommit` /
+   `listBranches` / `resolveRef` 均能读到真实对象与分支。
+
+**B5–B7 客户端能力（决定「无需自写协议编解码器」）**
+
+4. **`git.fetch` / `git.clone` / `git.push` 均接受自定义 `http` 客户端**，
+   且发出的正是标准智能 HTTP 请求：
+   - fetch/clone → `GET <url>/info/refs?service=git-upload-pack`；
+   - push → `GET <url>/info/refs?service=git-receive-pack`。
+   三者都从 advertisement 读 ref 与 capabilities，之后才发 POST。
+   → **M5b 只需实现服务端应答，不必碰协议编解码。**
+
+**B8–B10 服务端应答格式（逐条实测钉死）**
+
+5. **advertisement 的两条硬要求**（缺一即失败）：
+   - **响应头必须**是 `application/x-git-<service>-advertisement`，否则 isomorphic-git
+     走「dumb 服务器」回退路径，报 `SmartHttpError: Remote did not reply using the
+     "smart" HTTP protocol`；
+   - **首个 ref 行必须带 capabilities**，格式 `<oid> <ref>\0<cap1> <cap2>...`，
+     否则抛 `Expected "Two strings separated by '\x00'"`。
+   - 空仓库（无 ref）须用 `<40 个 0> capabilities^{}\0<caps>` 伪 ref 承载 capabilities
+     （真 git 2.41+ 的 `no-refs` 约定，源码 `index.cjs:9322` 明确比对该字符串）。
+6. ⚠️ **响应 `body` 必须是「单元素数组」`[Uint8Array]`，不能直接给 `Uint8Array`**：
+   `StreamReader` 走 `getIterator(stream)`，而 `Uint8Array` 自带 `Symbol.iterator`
+   会被当成**字节迭代器**（每次 `next()` 产出一个数字），于是流瞬间结束、报
+   `EmptyServerResponseError`。包成数组即让迭代器产出一个 buffer。
+7. **pkt-line 长度编码**：`(payload.length + 4).toString(16).padStart(4, '0')`，
+   与本机实测值吻合（`# service=git-upload-pack\n` 26 字节 → 头 `001e` = 30）。
+   flush 包为 `0000`。
+8. **side-band-64k 分路规则**（`GitSideBand.demux`，本源码 `index.cjs:2984` 附近）：
+   每块前置 1 字节通道号 —— `1` = packfile 数据、`2` = progress、`3` = fatal error、
+   **其它 → 落入 packetlines**。据此：
+   - upload-pack 应答：`NAK\n` **不分路**（进入 packetlines，`parseUploadPackResponse`
+     靠它判 `done`），packfile **必须分路**（否则永远收不到包）；
+   - receive-pack 应答：**整体必经 `GitSideBand.demux`**（`index.cjs:14614`），
+     故 `unpack ok` / `ok <ref>` / `ng <ref> <reason>` 都**必须包进通道 1**，
+     直接回裸 pkt-line 会解析出空串并抛
+     `Expected "unpack ok" or "unpack [error message]"`。
+   - 分块上限 65515 字节（1 字节通道号 + 数据，总计不超 64k 帧）。
+9. **`fetch` 需要 remote 配置里的 refspec**：未 `addRemote` 直接 fetch 会报
+   `NoRefspecError`（与真 git 一致）。`git.addRemote` 会自动写
+   `+refs/heads/*:refs/remotes/<remote>/*`。
+   实测全链路成功后：`fetchHead` = 远程头、`refs/remotes/origin/main` 生成、
+   远程对象在本地**真实可读**（`readCommit` 拿到提交信息）。
+
+**B11 push 被拒（4-5「协作冲突」的判定地基）**
+
+10. **`git.push` 会自行检测非快进**并抛 `PushRejectedError`
+    （`data: { reason: 'not-fast-forward' }`，message 为
+    `Push rejected because it was not a simple fast-forward. Use "force: true" to override.`）。
+    触发条件是 advertisement 公告的远程 ref 不是本地头的**祖先**。
+    → **无需服务端特判**：只要裸仓里已有「别人推的」提交，玩家 push 就会被正确拒绝，
+    这正是 4-5 剧本「远程领先 → push 被拒 → fetch → 合并 → push」的引擎依据。
+    ⚠️ 实测同时确认：**客户端不会在本地缺 ref 时自行通过**（此时才轮到服务端报错），
+    故两条路径（客户端先行判定 / 服务端 `ng` 拒绝）都要按真 git 语义实现，不得只做一条。
+
+**B13 实现期新增的四个协议坑（全部实测，写进 `fileRemote.ts` 的注释）**
+
+11. ⚠️ **`packObjects` 不做可达性递归**（本章最费时的一个坑）：
+    `git.packObjects({ oids: [commitOid] })` 产出的 pack 里**只有那个提交对象**，
+    没有它的 tree 与 blob。后果极隐蔽 —— fetch 协商成功、ref 也建好了，
+    但一旦检出工作区就报 `NotFoundError: Could not find <tree oid>`，
+    错误里给的是 **tree 的 oid**，完全指不到「pack 少打了对象」这个真因。
+    **`seedRemoteBranches` 有同样的问题**：裸仓自身就缺 tree/blob，
+    连服务端都读不出对象。
+    → 必须由服务端自行做**可达性遍历**（`collectReachableObjects`：
+    commit → tree → 子树/blob + 祖先提交），把全部对象一并交给 `packObjects`。
+    真 git 的 upload-pack 正是这么做的；isomorphic-git 的客户端只负责「我 want 这些 oid」。
+12. ⚠️ **`readObject` 没有 `'parsed'` 格式**：其 `format` 只接受
+    `'deflated' | 'wrapped' | 'content'`，传 `'parsed'` 抛
+    `InternalError: invalid requested format`（且 TS 的类型也不会拦下这个字符串）。
+    要读结构化对象须用专用接口 `git.readCommit` / `git.readTree`。
+    另注：**`readTree` 返回的 `tree` 本身就是条目数组**（`TreeObject = TreeEntry[]`），
+    不是带 `.entries` 的对象 —— 后者是包内另一个 `GitTree` 类的接口，
+    误写成 `tree.entries` 会抛 `tree.entries is not iterable`。
+13. ⚠️ **advertisement 必须同时有 `HEAD` 行与 `symref` capability**（两次才定位准）：
+    - **少了 HEAD 行** → isomorphic-git 的多分支 fetch 路径对 `HEAD` 调
+      `resolveAgainstMap`，解析不到就抛「找不到指定的文件或提交」，
+      `git fetch origin`（不带分支）永远失败；
+    - **有 HEAD 行但没有 `symref=HEAD:refs/heads/<分支>`** → HEAD 被当成**普通 ref**
+      收进 `remoteRefs`，refspec 映射错乱：fetch **不报错**，但
+      `refs/remotes/origin/main` 根本没建立（只多出一个诡异的 `origin/HEAD`），
+      玩家随后的 `git merge origin/main` 报「找不到 origin/main」。
+    - 以 `git upload-pack --advertise-refs` 实测校准：真 git 的输出正是
+      `HEAD` 行 + `symref=` capability + `refs/heads/*` 行。
+14. ⚠️ **`git clone` 前必须清空目标目录**：真 git 的 clone 要求目标不存在或为空，
+    而沙箱里 `/repo` 已被 `sandbox.reset()` 初始化过（哪怕 `template: 'cloneSource'`），
+    直接在已有仓库上 clone 会报一个与真因无关的 `NotFoundError`（oid 来自它对 HEAD
+    的内部解析，与远程真实内容对不上）。故 `gitApi.clone` 先递归清空 `/repo`。
+15. ⚠️ **`git fetch` 的 `singleBranch` 只在指定了 ref 时才该开**：开了它而没给 `ref` 时，
+    isomorphic-git 把 remoteRef 落成 `HEAD` —— 与第 13 条的 HEAD 解析问题叠加。
+    不给 ref 时按真 git 语义取回**全部**分支的更新。
+
+**B14 Node 侧取证注意（仅影响探针脚本，不影响浏览器）**
+
+16. 本机 Node v26 下 `import git from 'isomorphic-git'` 的**静态** ESM 导入会**静默挂起**
+    （连模块体第一行 `console.log` 都不执行）；动态 `await import()` 正常。
+    浏览器经 Vite 打包不受影响 —— 这是 Node 探针的取用方式问题。
+17. Node 下 LightningFS 的锁后端不稳定：`DefaultBackend.js:33` 是
+    `navigator.locks ? new Mutex2(name) : new Mutex(...)`，后者经 `idb-keyval` 需要
+    `indexedDB`（Node 无）。Node 26 虽提供 `navigator`，但连续创建多个实例时会回落到
+    `Mutex` 分支并抛 `ReferenceError: indexedDB is not defined`。
+    探针需垫一个 `navigator.locks`（⚠️ 签名是 `request(name, options, callback)`
+    **三参**形式，见 `Mutex2.js:33`，不是 Web Locks 的两参简写）。
+    **浏览器恒有 `navigator.locks`，生产代码无需此垫片。**
 
 ## 四、范围边界（M5 不做）
 
@@ -499,3 +632,141 @@ reload 后仍在同一关（不回菜单）、仓库内容原样读回（先前 
 - **快照恢复的产品口径 = 「自动恢复关卡中途进度」**：刷新关卡页后应回到
   原关卡继续玩，而不是回菜单重新开始。已按此口径实现并验收（见下节）。
 - M5b 的定稿在本文档 §三，可直接开工。
+
+---
+
+## 执行结果（M5b 完成，Lead 记录）
+
+> 状态：**M5b DONE**（第四章「星际连接」5 关 + 本地内存裸仓库 + 进程内智能 HTTP 服务端）。
+> **M5 至此全量交付**。
+
+### 交付清单
+
+- `engine/fileRemote.ts`（新增）—— 第四章的地基：
+  - 内存裸仓库（`/remote.git`）的读写：`readBareRefs` / `advertisedRefs` / `resetRemoteRepo`；
+  - **进程内 smart-HTTP 服务端**：`createRemoteHttpClient` 应答
+    `GET /info/refs?service=…`、`POST /git-upload-pack`、`POST /git-receive-pack`；
+  - pkt-line / side-band / advertisement 的原语与全部实测约束（见 §三 附录）；
+  - 可达性遍历 `collectReachableObjects`（**决定 clone/fetch 成败的关键**，见缺陷 11）；
+  - `seedRemoteBranches` / `ingestPack` / `packForFetch` / `parseReceivePackRequest`。
+- `engine/gitApi.ts` —— 新增远程段：`addRemote`（URL 白名单）/ `listRemotes` /
+  `deleteRemote` / `clone` / `push` / `fetch` / `pull`（fetch + merge 组合）/
+  `writeRemoteConfig`；常量 `ALLOWED_REMOTE_URL`、判定 `isAllowedRemoteUrl`。
+- `engine/sandbox.ts` —— 落地 `LevelInit.remotes`（含 `branches[].at` 的提交信息解析、
+  `linkLocal` 开关）与 `template: 'cloneSource'`（`resetLocalRepoOnly`）；
+  deferred fail-fast 名单收缩为仅 `tags`。
+- `game/types.ts` —— `LevelInit.remotes` 扩展（`branches` / `linkLocal`）+ 设计说明。
+- `game/validate/targetState.ts` —— `remote` 目标**转正**（判关联存在性，名称大小写敏感）。
+- `levels/schema.ts` —— 两份名单 9+2 → **10+1**；`remotes` 的结构校验 +
+  **跨字段校验**（`branches[].at` 必须是本关真实存在的预置提交信息）；
+  `template: 'cloneSource'` 放行。
+- `levels/chapters/ch4.ts`（新增）—— 第四章 5 关，含各关目标设计的完整推导与
+  设计缺口的如实记录。
+- `levels/chapters/index.ts` —— 注册 ch4、`playable: true`。
+- `levels/presets.ts` —— 第四章 10 份预置文件。
+- `game/command/grammar.ts` —— 白名单 += `remote` / `clone` / `push` / `fetch` / `pull`
+  与各自的 parser。
+- `game/command/executor.ts` —— 五个命令的分发与中文回显；`undoable` 复核
+  （远程命令**不属撤销类**，与 §7.2 的字面清单一致）。
+- `game/command/completion.ts` —— 补全词表 += 远程命令与 `origin` / `-v`。
+- `game/command/fragments.ts` —— **新增 `FOURTH_CHAPTER` 片段表**
+  （remote / clone / push / fetch / pull / **merge**）+ `COMMON_GIT_SLOT` 补齐
+  五组的 slot0（见缺陷 12）。
+- `ui/components/history/CommandHistory.tsx` —— 加 `data-testid="command-history"`（冒烟定位）。
+- `src/__tests__/fileRemote.test.ts`（新增，13 用例）、`levels.test.ts`（+ch4 段）、
+  其余既有用例按新事实更新。
+- `tools/smoke/run-ch4.cjs`（新增，33 断言）+ `package.json` 的 `smoke:ch4`。
+
+### 三门禁（最终）
+
+| 门禁 | 结果 | 对比 M5a |
+|---|---|---|
+| `pnpm typecheck` | **0 错误** | 持平 |
+| `pnpm test:run` | **378 passed**（11 文件） | 332 → 378（+46） |
+| `pnpm build` | **187.61 kB gzip** | 179.69 → 187.61（+7.92 kB，预算 350 kB） |
+
+### 真实浏览器冒烟（五段全绿）
+
+| 段 | 断言 | 结果 |
+|---|---|---|
+| `smoke:legacy` | 8 | ✅ 8/8 |
+| `smoke:ch2` | 8 | ✅ 8/8 |
+| `smoke:ch3` | 15 | ✅ 15/15 |
+| **`smoke:ch4`** | **33** | ✅ **33/33**（新增） |
+| `smoke:ch5` | 41 | ✅ 41/41 |
+| **合计** | **105** | ✅ **105/105** |
+
+`smoke:ch4` 覆盖：半拼骨架预填（5 关各断言一次）→ **URL 白名单的负向路径**
+（`https://github.com/...` 被拒且提示「只接受本地通道」）→ `remote add` → `push`
+→ `pull` → `clone` → **4-5 完整协作冲突剧本**（push 被拒 → fetch → merge）
+→ ch4 全通关 ⇒ ch5 解锁 → 重进 4-1 验证沙箱按 `LevelInit` 重建。
+
+### 执行中发现并修正的缺陷（本章新增 6 个，全部有回归测试或冒烟覆盖）
+
+1. **`packObjects` 不做可达性递归**（最费时的一个）：只传提交 oid 会得到
+   「只有提交对象」的残缺 pack —— fetch 协商成功、ref 也建好了，
+   但一检出工作区就报 `NotFoundError: Could not find <tree oid>`。
+   **`seedRemoteBranches` 同样中招**（裸仓自身缺 tree/blob）。
+   → 新增 `collectReachableObjects` 做图遍历，两处打包都改用它。
+2. **`readObject` 没有 `'parsed'` 格式**：其 `format` 只接受
+   `'deflated' | 'wrapped' | 'content'`，传 `'parsed'` 抛
+   `InternalError`（TS 类型也不拦）。改用 `readCommit` / `readTree` 专用接口。
+   另：**`readTree` 返回的 `tree` 本身就是条目数组**（`TreeObject = TreeEntry[]`），
+   不是带 `.entries` 的对象 —— 误写会抛 `tree.entries is not iterable`。
+3. **advertisement 必须同时有 `HEAD` 行与 `symref` capability**（两次才定位准）：
+   少 HEAD → 多分支 fetch 报「找不到指定的文件或提交」；
+   有 HEAD 但无 symref → HEAD 被当普通 ref，`origin/main` 根本没建立
+   （fetch 不报错，随后 merge 报「找不到 origin/main」）。
+   以 `git upload-pack --advertise-refs` 实测校准。
+4. **`git clone` 前必须清空目标目录**：沙箱的 `/repo` 已被 `sandbox.reset()`
+   初始化过，直接在已有仓库上 clone 会报与真因无关的 `NotFoundError`。
+5. **`fetch` 的 `singleBranch` 只在指定 ref 时才该开**：开了而没给 `ref` 时
+   remoteRef 落成 `HEAD`，与缺陷 3 叠加。
+6. **`indexPack` 的 `filepath` 必须是相对 `dir` 的路径**（开工前探针已记录，
+   实现期再次踩到）：传绝对路径会双拼，ENOENT 被 `FileSystem.read` 静默吞成
+   `null`，最终报 `TypeError: Cannot read properties of null`。
+
+### 冒烟基础设施的修正（M5b 顺带修好的既有隐患）
+
+7. **冒烟脚本读 `sessionStore` 的方式一直不可靠**（潜伏缺陷）：
+   经 CDP `evalJs` 里 `import('/src/store/sessionStore.ts')` 拿到的
+   **不是应用正在用的模块实例**（实测 `sameModule === false`，其 `history` 恒为 0）。
+   原实现之所以「偶尔能过」，是因为断言恰好落在可读的时序上。
+   → 全部改为**从 `data-testid="command-history"` 的 DOM 解析**（渲染结果才是事实来源），
+   并给出 `histCount` / `histCountExpr` / `latestHistory` / `captureLastEntry` 一套原语。
+8. **`resetStorage` 的就绪判据只认菜单**：M5a 起刷新会恢复到所在关卡，
+   boot 落点可能是关卡页 → 判据放宽为「已到 app 源且 `#root` 已渲染」。
+9. **CDP target 选择可能选到旧标签页**：多标签时 `find(url.includes('localhost'))`
+   会命中已失去渲染进程的那个 → 改为优先精确匹配 `APP`。
+10. **`runCommand`/`runFree` 的完成判据缺「关卡已结算」分支**：
+    命令若正好达成本关最后一项判据，面板会立刻卸载 → 只等计数必然超时
+    （4-1~4-5、5-1 全部一次过关，冒烟却逐条报「执行失败」）。
+11. **`COMMON_GIT_SLOT` 缺 ch4 五组的 slot0**：`draftFromSkeleton` 靠
+    「slot0 + slot1 同命令」锁组，缺 slot0 时**返回空草稿、执行按钮恒灰** ——
+    玩家根本拼不出命令（M4 的 merge/rebase 中过同样的招）。
+    已在 `inputMode.test.ts` 加**回归锁**：片段池里每个命令组都必须有 slot0。
+12. **`FRAGMENTS_BY_CHAPTER` 缺 ch4 条目**：会静默回落到 `FIRST_CHAPTER`
+    （init/add/commit/status），第四章的骨架全部拼不出来。
+    → 新增 `FOURTH_CHAPTER`（含 `merge`，4-5 的剧本要用）。
+13. **章节解锁口径随 ch4 落地自动变化**：
+    M5a 时「ch1~ch3 全通关 ⇒ ch5 解锁」（ch4 无卡被跳过）；
+    **M5b 起 ch5 要求 ch4 全通关**。`progression.test.ts` 新增「M5b 复核」小节锁定该行为，
+    `run-ch3.cjs` 的断言改为「ch4 解锁」、`run-ch5.cjs` 的种子补上 ch4 五关。
+14. 冒烟汇总分母随关卡数变化：20 → **25**（ch2 段 8/25、ch3 段 14/25）。
+
+### 设计缺口（如实记录，未假装判定完备）
+
+- **没有「远程分支状态」类的 `TargetCondition`**（§4.3 的 11 种里 `remote` 只判
+  **关联存在性**，不判远程分支指向何处）。后果：
+  - **4-2「传送数据」的「是否真的 push 了」无法由关卡判据表达**。
+    若写成 `commitExists + workdirClean`，玩家**只 commit 就过关**
+    （冒烟里的表现是「脚本还没点 push，关卡已结算」）；
+    故最终只锚定 `commitExists`（推进项），并在关卡注释里说明
+    「push 的真实性由直接断言裸仓的用例保证，而非靠关卡目标」。
+  - **4-5「协作冲突」**同理：判据锚在「远程的观测已进入本地历史」，
+    故 `fetch + merge` 即满足（`push` 与否不在判据内）。冒烟按两种时序分别处理。
+  - **补偿**：`levels.test.ts` 与 `run-ch4.cjs` 都**直接断言裸仓**
+    （远程 main === 本地 HEAD、能读出提交内容），那才是「远程真的收到了」的事实来源。
+- **4-1 的 `linkLocal: false`**：`remotes` 同时承担「预置远程内容」与「本地已关联」
+  两件事，而 4-1 恰恰要考 `git remote add` —— 若预置时就写配置，该关的 `remote`
+  目标会**开局即达标**。故加显式开关把两件事分开声明（实测逼出来的字段）。

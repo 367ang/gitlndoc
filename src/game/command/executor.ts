@@ -11,9 +11,13 @@
  *
  * ⚠️ 关于「undoable」：§6.2 规定撤销类命令（reset / revert / checkout -- / stash drop）才记
  * `undoable`。M4 的分支命令（branch / checkout <branch> / switch / merge / rebase / rm）
- * **不属于撤销类**（§7.2 字面清单只含上述四者；分支操作是「前进」而非「回退」），
- * 故仍恒为 false。3-5 变基关的评分依赖 optimalMoves（参考命令数），不依赖撤销罚分 ——
- * 实现处注释留档，M5 引入真正的撤销命令时再接线。
+ * 与 **M5b 的远程命令（remote / clone / push / fetch / pull）** 都**不属于撤销类**
+ * （§7.2 字面清单只含上述四者；分支与远程操作是「前进」而非「回退」），
+ * 故仍恒为 false。3-5 变基关的评分依赖 optimalMoves（参考命令数），不依赖撤销罚分。
+ *
+ * ⚠️ `git pull` 虽然内含 merge，但它是**获取远程更新**的常规动作，
+ * 不是「撤销自己的改动」—— 归入撤销类会让 4-3 的正常流程平白扣分。
+ * 这与 `reflog` 只读不扣分是同一条判断标准（见下方 undoable 的注释）。
  *
  * ⚠️ M1 只处理自由输入（`free`）。半拼模式的残缺 token 高亮属 M4，在 fragments/CommandBuilder 层实现。
  */
@@ -21,16 +25,23 @@
 import type { CommandEntry } from '../types';
 import {
   add as gitAdd,
+  addRemote as gitAddRemote,
   branch as gitBranch,
   checkout as gitCheckout,
   checkoutPaths as gitCheckoutPaths,
+  clone as gitClone,
   commit as gitCommit,
+  deleteRemote as gitDeleteRemote,
   diff as gitDiff,
+  fetch as gitFetch,
   init as gitInit,
   listBranches as gitListBranches,
+  listRemotes as gitListRemotes,
   log as gitLog,
   logAll as gitLogAll,
   merge as gitMerge,
+  pull as gitPull,
+  push as gitPush,
   rebase as gitRebase,
   reflog as gitReflog,
   remove as gitRemove,
@@ -40,6 +51,7 @@ import {
   revert as gitRevert,
   status as gitStatus,
   unsupported,
+  DEFAULT_BRANCH,
   type CommitEntry,
   type RepoOptions,
   type StatusSummary,
@@ -539,6 +551,93 @@ export async function execute(input: string, options: ExecuteOptions = {}): Prom
         if (lines.length === 0) return succeed(tokens, ['（还没有任何 HEAD 移动记录）']);
         return succeed(tokens, lines);
       });
+
+    // ── M5b：第四章「星际连接」───────────────────────────────────────────
+    case 'remote': {
+      if (command.subcommand === 'list') {
+        return unwrap(await gitListRemotes(repoOptions), tokens, (remotes) => {
+          if (remotes.length === 0) return succeed(tokens, ['（还没有关联任何远程仓库）']);
+          // 对齐真 git 的 `git remote -v` 输出：`<名称>\t<地址> (fetch)`
+          return succeed(
+            tokens,
+            remotes.flatMap((entry) => [
+              `${entry.name}\t${entry.url} (fetch)`,
+              `${entry.name}\t${entry.url} (push)`,
+            ]),
+          );
+        });
+      }
+
+      if (command.subcommand === 'remove') {
+        const name = command.name as string;
+        return unwrap(await gitDeleteRemote(name, repoOptions), tokens, () =>
+          succeed(tokens, [`已移除远程「${name}」。`]),
+        );
+      }
+
+      // `git remote add <name> <url>` —— URL 白名单由 gitApi 把关（决策 ③）
+      const name = command.name as string;
+      const url = command.url as string;
+      return unwrap(await gitAddRemote(name, url, repoOptions), tokens, (entry) =>
+        succeed(tokens, [`已添加远程「${entry.name}」→ ${entry.url}`]),
+      );
+    }
+
+    case 'clone':
+      return unwrap(await gitClone(command.url, repoOptions), tokens, () =>
+        succeed(tokens, [
+          `正在克隆到 ${repoOptions.dir ?? '/repo'}...`,
+          `克隆完成 —— 远程的完整历史已取回本地。`,
+        ]),
+      );
+
+    case 'push': {
+      const remote = command.remote ?? 'origin';
+      const branch = command.branch ?? DEFAULT_BRANCH;
+      return unwrap(await gitPush(remote, { ...repoOptions, ref: branch }), tokens, () =>
+        succeed(tokens, [
+          `To ${remote}`,
+          `   ${branch} -> ${branch}`,
+          `推送完成 —— 远程的 ${branch} 已与本地同步。`,
+        ]),
+      );
+    }
+
+    case 'fetch': {
+      const remote = command.remote ?? 'origin';
+      const options = command.branch
+        ? { ...repoOptions, ref: command.branch }
+        : repoOptions;
+      return unwrap(await gitFetch(remote, options), tokens, () => {
+        const branch = command.branch ?? DEFAULT_BRANCH;
+        return succeed(tokens, [
+          `From ${remote}`,
+          `   * branch            ${branch}     -> FETCH_HEAD`,
+          `已获取远程更新到 ${remote}/${branch}（工作区未变动）。`,
+        ]);
+      });
+    }
+
+    case 'pull': {
+      const remote = command.remote ?? 'origin';
+      const branch = command.branch ?? DEFAULT_BRANCH;
+      return unwrap(await gitPull(remote, { ...repoOptions, ref: branch }), tokens, (result) => {
+        if (result.upToDate) {
+          return succeed(tokens, ['已经是最新的（Already up to date.）']);
+        }
+        if (result.fastForward) {
+          return succeed(tokens, [
+            `正在更新 ${remote}/${branch}..HEAD 以快进合并（Fast-forward）`,
+            `已把远程的更新合并到当前分支。`,
+          ]);
+        }
+        return succeed(tokens, [
+          `From ${remote}`,
+          `   * branch            ${branch}     -> FETCH_HEAD`,
+          `已合并远程的更新（生成合并提交）。`,
+        ]);
+      });
+    }
 
     default:
       // SUPPORTED_VERBS 已由 grammar 收敛，此处不可达

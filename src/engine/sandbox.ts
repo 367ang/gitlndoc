@@ -21,20 +21,23 @@
 
 import type { LevelInit } from '../game/types';
 import { GitCommandError, GitUnsupportedError, runGit, type GitResult } from './errors';
-import { clearSandboxRoot, ensureSandboxRoot, flushFs, fsp, REPO_DIR } from './fs';
+import { clearSandboxRoot, ensureSandboxRoot, flushFs, fsp, getFs, REMOTE_DIR, REPO_DIR } from './fs';
 import * as gitApi from './gitApi';
 import { DEFAULT_BRANCH } from './gitApi';
+import { resetRemoteRepo, seedRemoteBranches } from './fileRemote';
 import { clearReflog } from './reflog';
 
 /** M1 已落地的 `LevelInit` 字段——只有这两个，其余字段见 `unsupportedInitError()` */
 export type SupportedInitField = 'files' | 'commits';
 
 /**
- * M5/M6 才会落地的 `LevelInit` 字段。
+ * M6 才会落地的 `LevelInit` 字段。
  * 列出它们是为了在 fail-fast 报错里给出准确提示，而非默默吞掉。
- * （M4 起 `branches` 已落地，自本名单移除。）
+ *
+ * ⚠️ M4 起 `branches` 已落地、**M5b 起 `remotes` 与 `template:'cloneSource'` 已落地**，
+ * 三者均已自本名单移除 —— 现仅剩 `tags`（第六章，属 M6）。
  */
-export type DeferredInitField = 'template:cloneSource' | 'tags' | 'remotes';
+export type DeferredInitField = 'tags';
 
 /**
  * `reset()` 成功的返回值。
@@ -70,12 +73,13 @@ export interface SandboxState {
  *
  * 注意这里刻意**不接受** `template: 'blank' | 'emptyRepo'`：这两者与 M1 的默认行为
  * （清空后 init 一个空仓库）语义一致，属已支持范围，不算 deferred。
+ *
+ * ⚠️ M5b 起 `remotes` 与 `template:'cloneSource'` 已落地（第四章「星际连接」），
+ * 故自此名单移除 —— 现仅剩 `tags`（第六章，属 M6）。
  */
 function deferredFieldsOf(init: LevelInit): DeferredInitField[] {
   const deferred: DeferredInitField[] = [];
-  if (init.template === 'cloneSource') deferred.push('template:cloneSource');
   if (init.tags?.length) deferred.push('tags');
-  if (init.remotes?.length) deferred.push('remotes');
   return deferred;
 }
 
@@ -99,7 +103,7 @@ function assertSupportedScope(init: LevelInit): GitResult<void> {
     ok: false,
     error: new GitUnsupportedError(
       `关卡初始化字段 ${field}`,
-      `LevelInit 的 ${field} 字段属 M4/M5，M1 尚未实现，故拒绝执行而非静默忽略。`,
+      `LevelInit 的 ${field} 字段属 M6，当前版本尚未实现，故拒绝执行而非静默忽略。`,
     ),
   };
 }
@@ -233,10 +237,35 @@ export async function reset(init: LevelInit = {}): Promise<GitResult<SandboxStat
       if (!mainCheck.ok) throw mainCheck.error;
     }
 
+    // 7.5) 远程宇宙（M5b，第四章「星际连接」）。
+    //      顺序刻意如此：**先**在 `/repo` 里建好预置提交，**再**把它们搬进裸仓 ——
+    //      裸仓的内容必须来自真实提交（搬迁走 packObjects + indexPack，产出真对象库），
+    //      而不是手写对象文件（§14 禁止伪造）。
+    const remoteSeeded = await seedRemote(init);
+    if (!remoteSeeded.ok) throw remoteSeeded.error;
+
+    // 7.6) `template: 'cloneSource'`（M5b，服务 4-4「克隆宇宙」）：
+    //      把 `/repo` 清空成一个**没有历史的空仓库**，让玩家必须自己 `git clone`。
+    //
+    //      ⚠️ 为什么必须在 seedRemote **之后**：预置提交既是「远程内容的来源」，
+    //      又被本步清掉 —— 顺序反了就没有东西可搬进裸仓了。
+    //      ⚠️ 语义边界：本步只清 `/repo`（工作区 + 索引 + 对象库），不动 `/remote.git`。
+    //      这正是「克隆」的前置状态：本地空、远程有。
+    if (init.template === 'cloneSource') {
+      const cleared = await resetLocalRepoOnly();
+      if (!cleared.ok) throw cleared.error;
+
+      // 清空之后目标状态必定未达成，无需再走后面的汇总逻辑计算「干净与否」——
+      // 但汇总仍要走（`reset()` 的返回值要给 UI 用），故这里只把游标推进到空仓库。
+    }
+
     // 8) 预置「工作区被搞乱」的状态（M5a 的 `dirty`，服务第五章的撤销剧本）。
     //    ⚠️ 必须在**所有预置提交与检出游标归位之后**执行：提交会写文件、checkout 会
     //    重建工作区，任何一步在其后都会把玩家要面对的「错误状态」覆盖掉。
-    await applyDirty(init.dirty ?? {});
+    //    ⚠️ 也必须在 cloneSource 清空之后 —— 否则 dirty 写入的文件会被清掉。
+    if (init.template !== 'cloneSource') {
+      await applyDirty(init.dirty ?? {});
+    }
 
     // 9) 汇总状态：提交列表 + 工作区是否干净
     const logged = await gitApi.log({ dir: REPO_DIR });
@@ -254,6 +283,119 @@ export async function reset(init: LevelInit = {}): Promise<GitResult<SandboxStat
       commits: logged.value.map(({ hash, shortHash, message }) => ({ hash, shortHash, message })),
       clean: staged.length === 0 && unstaged.length === 0 && untracked.length === 0,
     };
+  });
+}
+
+/**
+ * 预置**远程宇宙**（M5b，服务第四章「星际连接」）。
+ *
+ * 步骤：
+ *   1. 重建裸仓为空（`resetRemoteRepo`）—— 每关都是全新的远程宇宙，上一关的
+ *      分支若残留会让 4-2「推送」在开局即显示「已是最新」，属跨关串味；
+ *   2. 按 `remotes[].branches[].at` 指明的**提交信息**，在 `/repo` 的预置历史里
+ *      定位到对应提交 oid；
+ *   3. 把这些提交搬进裸仓并置分支指针（`seedRemoteBranches`，走真 pack 搬迁）；
+ *   4. 写 `remote.<name>.url` 配置 —— 让玩家进关就能 `git push`，不必先 add。
+ *      （4-1「建立航道」正是考 `remote add`，故那一关的 `remotes` 只给空 branches
+ *       或干脆不给 —— 由关卡数据决定，本函数不做特判。）
+ *
+ * ⚠️ 两个刻意的 fail-fast：
+ *   - `at` 找不到对应提交 → 报错。否则会安静地生成一个空远程分支，玩家 push 时
+ *     才发现「远程什么都没有」，而报错信息指不到关卡数据；
+ *   - `url` 不合白名单 → 报错。与 `gitApi.addRemote` 同一口径（决策 ③）。
+ */
+async function seedRemote(init: LevelInit): Promise<GitResult<void>> {
+  // 无论关卡是否声明远程，每关都重建裸仓 —— 与 `/repo` 的 clearSandboxRoot 对称。
+  // 否则上一关的远程分支会留到本关（跨关串味）。
+  if ((init.remotes ?? []).length === 0) {
+    return resetRemoteRepo();
+  }
+
+  const resetted = await resetRemoteRepo();
+  if (!resetted.ok) return resetted;
+
+  // 预置提交的信息 → oid 映射（用于把关卡数据里的 `at` 解析成真实提交）
+  //
+  // ⚠️ 必须用 `logAll`（遍历**全部**分支）而非 `log`（只走当前 HEAD 链）：
+  //    `at` 可能指向非当前分支上的提交 —— 如 4-5「协作冲突」里
+  //    「别人推的」那条与本地区分叉的历史，它不在 main 的祖先链上。
+  const allCommits = await gitApi.logAll({ dir: REPO_DIR });
+  if (!allCommits.ok) return allCommits;
+
+  const oidByMessage = new Map<string, string>();
+  for (const commit of allCommits.value) {
+    // 同名提交取**最早**的一个：关卡数据里的信息是叙事性的，重名属作者疏忽，
+    // 取最早可给出稳定且可解释的结果（不静默取任意一个）。
+    const key = commit.message.trim();
+    if (!oidByMessage.has(key)) oidByMessage.set(key, commit.hash);
+  }
+
+  for (const remote of init.remotes ?? []) {
+    if (!gitApi.isAllowedRemoteUrl(remote.url)) {
+      return {
+        ok: false,
+        error: new GitUnsupportedError(
+          `remote add ${remote.name} ${remote.url}`,
+          `关卡数据错误：远程地址「${remote.url}」不在白名单内，` +
+            `应使用 ${gitApi.ALLOWED_REMOTE_URL}。`,
+        ),
+      };
+    }
+
+    const branches: { name: string; fromDir: string; oid: string }[] = [];
+    for (const entry of remote.branches ?? []) {
+      const oid = oidByMessage.get(entry.at.trim());
+      if (oid === undefined) {
+        return {
+          ok: false,
+          error: new GitCommandError(
+            'NotFoundError',
+            `关卡数据错误：远程分支「${entry.branch}」引用的提交「${entry.at}」` +
+              '不存在于本关的预置提交中。',
+            `sandbox seedRemote: commit "${entry.at}" not found`,
+            { command: 'remote seed', hint: '请核对关卡 init.commits 里的 message。' },
+          ),
+        };
+      }
+      branches.push({ name: entry.branch, fromDir: REPO_DIR, oid });
+    }
+
+    const seeded = await seedRemoteBranches(branches);
+    if (!seeded.ok) return seeded;
+
+    // 写 remote 配置：让玩家进关即可 push/fetch。
+    // ⚠️ `linkLocal: false` 用于「本关要考 `git remote add`」的场景（4-1）——
+    //    若此处照写，该关的 `remote` 目标会开局即达标，玩家不敲命令就过关（实测抓到）。
+    //    默认 true：多数远程关卡希望玩家直接进入 push/fetch 的正题。
+    if (remote.linkLocal !== false) {
+      const urlWritten = await gitApi.writeRemoteConfig(remote.name, gitApi.ALLOWED_REMOTE_URL);
+      if (!urlWritten.ok) return urlWritten;
+    }
+  }
+
+  return { ok: true, value: undefined };
+}
+
+/**
+ * 把 `/repo` 清空成一个**没有历史的空仓库**（`template: 'cloneSource'`）。
+ *
+ * 用途：构造「本地空、远程有」的克隆前置状态（4-4「克隆宇宙」）。
+ *
+ * ⚠️ 与 `resetRemoteRepo` 对称但**对象不同**：本函数只动 `/repo`，绝不动 `/remote.git`
+ *    —— 后者正是玩家要克隆的源。两者混用会把「待克隆的远程」也清掉，
+ *    现象是 clone 出一个空仓库（而 glone 自身不会报错）。
+ */
+async function resetLocalRepoOnly(): Promise<GitResult<void>> {
+  return runGit('sandbox reset-clone-source', async () => {
+    const fs = getFs().promises;
+
+    // 递归删掉 /repo 后重建 —— `git.init` 是幂等的，只删内部文件不会清掉对象库与 refs
+    const { removeDir } = await import('./fs');
+    await removeDir(REPO_DIR);
+    await fs.mkdir(REPO_DIR, { mode: 0o777 });
+
+    const inited = await gitApi.init({ dir: REPO_DIR });
+    if (!inited.ok) throw inited.error;
   });
 }
 

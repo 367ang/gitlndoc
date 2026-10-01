@@ -33,8 +33,8 @@ const SCORING_KEYS: readonly (keyof ScoringParams)[] = [
 /**
  * §4.3 中**已实现判定逻辑**的 `TargetCondition` 类型。
  *
- * ⚠️ 这是「实现进度」的事实来源：`src/game/validate/targetState.ts` 处理这 9 种，
- * 其余 2 种由 `UNIMPLEMENTED_TARGET_TYPES` 列出并明确报「尚未实现」。
+ * ⚠️ 这是「实现进度」的事实来源：`src/game/validate/targetState.ts` 处理这 10 种，
+ * 其余 1 种由 `UNIMPLEMENTED_TARGET_TYPES` 列出并明确报「尚未实现」。
  * 两处名单必须同步 —— 由 `levels.test.ts` 断言两份名单互补且与 targetState 一致。
  */
 export const IMPLEMENTED_TARGET_TYPES: readonly TargetCondition['type'][] = [
@@ -48,12 +48,13 @@ export const IMPLEMENTED_TARGET_TYPES: readonly TargetCondition['type'][] = [
   'headBranch',
   'merged',
   'logOrder',
+  // M5b（第 4 章远程关卡）
+  'remote',
 ] as const;
 
-/** §4.3 中尚未实现判定逻辑的类型（对应章节属 M5/M6） */
+/** §4.3 中尚未实现判定逻辑的类型（对应章节属 M6） */
 export const UNIMPLEMENTED_TARGET_TYPES: readonly TargetCondition['type'][] = [
   'tag',
-  'remote',
 ] as const;
 
 /** 校验结果：成功时收窄为 `Level`，失败时给出**可直接展示给关卡作者**的中文原因 */
@@ -178,18 +179,21 @@ function validateHints(hints: unknown, collector: ErrorCollector): void {
 }
 
 /**
- * 校验 `init`：允许 `files` / `commits` / `branches`（M4 起已落地），
+ * 校验 `init`：允许 `files` / `commits` / `branches`（M4）、
+ * `remotes` 与 `template: 'cloneSource'`（M5b），
  * 以及语义等价的 `template: 'blank' | 'emptyRepo'`。
  *
- * ⚠️ `tags` / `remotes` / `template: 'cloneSource'` 会在
- * `sandbox.reset()` 处 **fail-fast 报错**（刻意不伪造，见 docs/milestones/M1-tasks.md「实测环境事实」）。
- * 若把关卡写坏了要等到玩家进关才炸，体验很差 —— 故这里在校验期就拦下，
- * 并给出与 sandbox 同一口径的说明。
+ * ⚠️ `tags` 会在 `sandbox.reset()` 处 **fail-fast 报错**（刻意不伪造，见
+ * docs/milestones/M1-tasks.md「实测环境事实」）。若把关卡写坏了要等到玩家进关才炸，
+ * 体验很差 —— 故这里在校验期就拦下，并给出与 sandbox 同一口径的说明。
+ * （M5b 起 `remotes` / `cloneSource` 已落地，自 deferred 名单移除。）
  *
- * M4 校验细则：
+ * 校验细则：
  *   - `branches`：name 非空且不以 `-` 开头；`from` 可选、非空字符串；
- *   - `commits[].on`：可选分支名，同上；`commits[].files`：与 `init.files` 同规则
- *     （非空路径 → 字符串内容）。
+ *   - `commits[].on`：可选分支名，同上；`commits[].files`：与 `init.files` 同规则；
+ *   - `remotes[].branches[].at`：必须是本关 `init.commits` 里**真实存在**的提交信息 ——
+ *     这条跨字段校验能在关卡编写期就抓到「引用了一条不存在的提交」，
+ *     而不用等玩家进关时 `sandbox.seedRemote` 才 fail-fast。
  */
 function validateInit(init: unknown, collector: ErrorCollector): void {
   if (typeof init !== 'object' || init === null) {
@@ -199,22 +203,110 @@ function validateInit(init: unknown, collector: ErrorCollector): void {
 
   const { template, files, commits, branches, tags, remotes } = init as LevelInit;
 
-  if (template !== undefined && template !== 'blank' && template !== 'emptyRepo') {
+  if (
+    template !== undefined &&
+    template !== 'blank' &&
+    template !== 'emptyRepo' &&
+    template !== 'cloneSource'
+  ) {
     collector.add(
       'init.template',
-      `"${String(template)}" 不可用；当前支持 'blank' 与 'emptyRepo'（'cloneSource' 属 M5）。`,
+      `"${String(template)}" 不可用；当前支持 'blank' / 'emptyRepo' / 'cloneSource'。`,
     );
   }
 
-  // sandbox.reset() 的 fail-fast 名单，此处提前拦截
+  // sandbox.reset() 的 fail-fast 名单，此处提前拦截（M5b 起仅剩 tags）
   const deferred: string[] = [];
   if (Array.isArray(tags) && tags.length > 0) deferred.push('tags');
-  if (Array.isArray(remotes) && remotes.length > 0) deferred.push('remotes');
   if (deferred.length > 0) {
     collector.add(
       'init',
-      `${deferred.join(' / ')} 尚未落地（属 M5/M6），sandbox.reset() 会 fail-fast 拒绝执行。`,
+      `${deferred.join(' / ')} 尚未落地（属 M6），sandbox.reset() 会 fail-fast 拒绝执行。`,
     );
+  }
+
+  // 本关全部预置提交的信息（用于校验 remotes 的 `at` 引用是否有效）
+  const commitMessages = new Set(
+    (Array.isArray(commits) ? commits : [])
+      .map((entry) => {
+        const record = entry as { msg?: unknown; message?: unknown };
+        const text = typeof record.message === 'string' ? record.message : record.msg;
+        return typeof text === 'string' ? text.trim() : '';
+      })
+      .filter((text) => text.length > 0),
+  );
+
+  if (remotes !== undefined) {
+    if (!Array.isArray(remotes)) {
+      collector.add('init.remotes', '必须是数组（可为空）。');
+    } else {
+      const seen = new Set<string>();
+      remotes.forEach((entry: unknown, index) => {
+        const path = `init.remotes[${index}]`;
+        if (typeof entry !== 'object' || entry === null) {
+          collector.add(path, '必须是 { name, url, branches? } 对象。');
+          return;
+        }
+        const { name, url, branches: remoteBranches, linkLocal } = entry as {
+          name?: unknown;
+          url?: unknown;
+          branches?: unknown;
+          linkLocal?: unknown;
+        };
+
+        if (typeof name !== 'string' || name.trim().length === 0 || name.startsWith('-')) {
+          collector.add(`${path}.name`, '必须是非空且不以 - 开头的远程名。');
+        } else if (seen.has(name)) {
+          // 同名远程重复声明会让 `remote.<name>.url` 被先后覆写，属作者笔误
+          collector.add(`${path}.name`, `远程名「${name}」重复声明。`);
+        } else {
+          seen.add(name);
+        }
+
+        if (typeof url !== 'string' || url.trim().length === 0) {
+          collector.add(`${path}.url`, '必须是非空字符串（沙箱地址）。');
+        }
+
+        // `linkLocal` 只接受布尔值：它是「是否写本地 remote 配置」的开关，
+        // 传别的值（如字符串 'false'）会被 `!== false` 判成 true，静默失效。
+        if (linkLocal !== undefined && typeof linkLocal !== 'boolean') {
+          collector.add(`${path}.linkLocal`, '若提供，必须是布尔值。');
+        }
+
+        if (remoteBranches !== undefined) {
+          if (!Array.isArray(remoteBranches)) {
+            collector.add(`${path}.branches`, '必须是数组（可为空）。');
+          } else {
+            remoteBranches.forEach((branchEntry: unknown, branchIndex: number) => {
+              const branchPath = `${path}.branches[${branchIndex}]`;
+              if (typeof branchEntry !== 'object' || branchEntry === null) {
+                collector.add(branchPath, '必须是 { branch, at } 对象。');
+                return;
+              }
+              const { branch, at } = branchEntry as { branch?: unknown; at?: unknown };
+              if (
+                typeof branch !== 'string' ||
+                branch.trim().length === 0 ||
+                branch.startsWith('-')
+              ) {
+                collector.add(`${branchPath}.branch`, '必须是非空且不以 - 开头的分支名。');
+              }
+              if (typeof at !== 'string' || at.trim().length === 0) {
+                collector.add(`${branchPath}.at`, '必须是非空字符串（预置提交的信息）。');
+              } else if (commitMessages.size > 0 && !commitMessages.has(at.trim())) {
+                // ⚠️ 跨字段校验：`at` 必须指向本关真实存在的预置提交。
+                //    交给运行时才报的话，玩家会先看到「进关就报错」，而关卡作者
+                //    得到的信息也不如这里直接（运行时报错在 sandbox 层）。
+                collector.add(
+                  `${branchPath}.at`,
+                  `「${at}」不是本关 init.commits 里的任何提交信息。`,
+                );
+              }
+            });
+          }
+        }
+      });
+    }
   }
 
   if (branches !== undefined) {

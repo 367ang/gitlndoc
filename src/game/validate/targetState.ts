@@ -16,14 +16,16 @@
  *
  * ⚠️ 实现进度：M2 实现第一章用到的 5 种 `TargetCondition`
  * （`file` / `commitCount` / `commitMessage` / `commitExists` / `workdirClean`）；
- * M4 增补第 2–3 章需要的 4 种（`branch` / `headBranch` / `merged` / `logOrder`）。
- * 其余 2 种（`tag` / `remote`）属 M5/M6，
+ * M4 增补第 2–3 章需要的 4 种（`branch` / `headBranch` / `merged` / `logOrder`）；
+ * **M5b 增补第 4 章需要的 1 种（`remote`）**。
+ * 其余 1 种（`tag`）属 M6，
  * **明确返回「尚未实现」且判定为未达成** —— 绝不静默当作通过（§14 禁止伪造）。
  */
 
 import {
   isDescendent,
   listBranches,
+  listRemotes,
   log as gitLog,
   logWithRef,
   resolveRef as gitResolveRef,
@@ -483,14 +485,46 @@ export async function evaluateTarget(
       };
     }
 
-    // --- 以下 2 种属 M5/M6，明确报「尚未实现」，不静默通过（§14） ---
+    // --- remote：远程关联（M5b，第四章「星际连接」）---
+    case 'remote': {
+      const remotes = await listRemotes(options);
+      if (!remotes.ok) {
+        return { target, ok: false, implemented: true, detail: STATUS_UNAVAILABLE };
+      }
+
+      // ⚠️ 名称大小写敏感：真 git 的 remote 名是配置键，`Origin` 与 `origin` 是两个
+      //    不同的 remote。此处不做宽容匹配，与 `branch` 判定同款纪律。
+      const found = remotes.value.find((entry) => entry.name === target.name);
+
+      if (target.hasRemote) {
+        return {
+          target,
+          ok: found !== undefined,
+          implemented: true,
+          detail:
+            found !== undefined
+              ? `已关联远程「${target.name}」（${found.url}）。`
+              : `还没有关联名为「${target.name}」的远程仓库。`,
+        };
+      }
+      return {
+        target,
+        ok: found === undefined,
+        implemented: true,
+        detail:
+          found === undefined
+            ? `远程「${target.name}」的关联已移除。`
+            : `远程「${target.name}」仍然关联着（${found.url}）。`,
+      };
+    }
+
+    // --- tag 属 M6，明确报「尚未实现」，不静默通过（§14） ---
     case 'tag':
-    case 'remote':
       return {
         target,
         ok: false,
         implemented: false,
-        detail: `目标类型 "${target.type}" 尚未实现（属 M5/M6），本关无法据此判定。`,
+        detail: `目标类型 "${target.type}" 尚未实现（属 M6），本关无法据此判定。`,
       };
 
     default: {

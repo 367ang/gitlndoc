@@ -29,7 +29,9 @@ export function CommandHistory({ history }: CommandHistoryProps) {
   }, [history.length])
 
   return (
-    <div className={styles.scroller} ref={scroller}>
+    // ⚠️ `data-testid` 供真实浏览器冒烟定位（styles 走 CSS Module，类名是哈希，
+    //    无稳定选择器 —— 与 CommandBuilder 的 `command-preview` 同一取舍）。
+    <div className={styles.scroller} ref={scroller} data-testid="command-history">
       <div className={styles.log}>
         {history.length === 0 && (
           <pre className={styles.hint}>{EMPTY_HINT.join('\n')}</pre>
