@@ -18,7 +18,7 @@
 
 ## 当前状态
 
-**M1（地基）～ M5（第五章撤销 + 快照持久化 + 刷新自动恢复中途进度；第四章「星际连接」+ 本地远程客户端）全部完成**，三门禁当前为 **`typecheck` 0 / `test` 378 passed / `build` 187.61 kB gzip**（M5b 实测）。下一阶段为 **M6（第六章「历史锚点」标签 + 综合终章 F）**。
+**M1（地基）～ M6（第六章「历史锚点」标签 + 综合终章 F；perfect-game 成就 + intro/结局真实化 + GitGraph 标签徽标）全部完成**，三门禁当前为 **`typecheck` 0 / `test` 399 passed / `build` 194.78 kB gzip**（M6 实测）。全游戏 **32 关可玩**（ch1:4 + ch2:4 + ch3:6 + ch4:5 + ch5:6 + ch6:5 + F:2）。下一阶段为 **M7（打磨、调参、E2E）**。
 
 各里程碑的**产出、三门禁历史、实测环境事实与遗留移交**见 **`docs/milestones/README.md`**（索引）与 `docs/milestones/M*-tasks.md`（各期详情），本文件不复述。
 
@@ -81,6 +81,27 @@
     其 `history`/`view` 恒为初始态，断言会稳定假失败。
     一律改为读 **DOM**（`data-testid="command-history"` 等渲染结果才是事实来源）。
 
+**M6 新增的引擎事实（第六章「历史锚点」与终章的全部依据，详见 M6-tasks.md §五）：**
+
+24. ⚠️ **注解标签必须走 `git.annotatedTag()`**：isomorphic-git 1.27 的 `git.tag()`
+    **根本不接收 message 参数**（源码确认 + 探针实测），传了也只产轻量标签，
+    `readTag` 随即抛 `ObjectTypeError`（ref 指向的是提交）—— 坑的外观是
+    「-a -m 静默变成轻量标签」。
+25. ⚠️ **`readTag()` 返回 `{ oid, tag: TagObject, payload }`**：标签名在 `.tag.tag`、
+    目标提交在 `.tag.object`（peel 一层即够）。轻量标签的 `readTag` 必然抛
+    `ObjectTypeError` —— 这是「注解/轻量两分法」的判定依据，不是异常路径。
+26. **tag 推送走真协议全链路可行**：`git.push({ ref: '<tag名>' })` 经 `refpaths`
+    解析为 `refs/tags/<名>`，tag 对象由 `listCommitsAndTags` 一并打包；
+    旧标签重推被客户端拒（`PushRejectedError('tag-exists')`，与真 git 同义）。
+27. ⚠️ **push 的分支参数不能用 `resolveRef` 判定是否为标签**：`resolveRef` 对未知
+    名字按「完整引用名」回退（`v1.0` → `refs/tags/v1.0`），会把标签误判成分支；
+    二义性判定必须查 `listTags` 名字表。
+28. ⚠️ **`sandbox` 收尾检出位置的例外必须显式声明**（`LevelInit.stayOnBranch`）：
+    隐式规则（「最后一条预置在哪个分支就停哪」）实测破坏 ch3-2/ch3-3/ch4-3/4-5
+    四关的既有前提 —— 谁需要例外谁声明，其余关卡恒回 main。
+29. ⚠️ **合并冲突需要「两侧都改且内容不同」**：只有 feature 一侧改过文件时 merge
+    是安静的三方合并 —— F-1 因此在 main 侧也预置了一次信标改写。
+
 > 另需注意：`development-refinement.md` §8 的「主要命令集」列曾与 GDD 不一致 —— 第一章被误写为 `init, status, log`、第二章被误写为 `add, commit, .gitignore`，**已于 M2 开工前按 GDD 订正**为「一：`init, add, commit`」「二：`status, diff, log, rm, .gitignore`」。§8 是逐章核对过的，其余行与 GDD 一致（个别概括性差异，如三章未列 `switch`、六章列了 `show`/`describe`，属「主要命令」的合理列举）。**若再改 §8，务必与 `game-design.md` 第 4 节的关卡表逐行比对。**
 
 ## 命令
@@ -96,6 +117,7 @@ pnpm smoke:ch2
 pnpm smoke:ch3
 pnpm smoke:ch5       # M5a 新增（第五章六关 + 持久化/刷新恢复复核）
 pnpm smoke:ch4       # M5b 新增（第四章五关 + 远程协议 + 协作冲突剧本）
+pnpm smoke:ch6       # M6 新增（第六章五关 + GitGraph 标签徽标 + 结局页）
 ```
 
 包管理器：**统一使用 pnpm**（与工程文档 §12 的技术选型一致）。`package.json` 中的 `scripts` 字段供 pnpm 调用，不要改用 npm。
@@ -106,7 +128,7 @@ pnpm smoke:ch4       # M5b 新增（第四章五关 + 远程协议 + 协作冲�
 > ```
 > 同一原因也会导致 `gh` 不可见（影响推送）。
 
-测试运行器已在 M1 配好：**Vitest + @testing-library/react**（`vite.config.ts` 的 `test` 字段，`environment: 'jsdom'`，`globals: true`），测试置于 `src/__tests__/`。**M5b 后共 11 个文件**：`tokenize.test.ts`(22)、`executor.test.ts`(71)、`targetState.test.ts`(35)、`components.test.tsx`(51)、`levels.test.ts`(77)、`scoring.test.ts`(21)、`inputMode.test.ts`(16)、`refExpr.test.ts`(24)、`persistence.test.ts`(37)、`progression.test.ts`(11)、**`fileRemote.test.ts`(13，M5b 新增)** 全部为真实用例（**378 passed**，无 todo）。
+测试运行器已在 M1 配好：**Vitest + @testing-library/react**（`vite.config.ts` 的 `test` 字段，`environment: 'jsdom'`，`globals: true`），测试置于 `src/__tests__/`。**M6 后共 11 个文件，399 个真实用例（无 todo）**，逐文件计数见 `docs/milestones/M6-tasks.md`「验收 / 三门禁」。
 
 > ⚠️ `src/__tests__/setup.ts` 里的 `import 'fake-indexeddb/auto'` **不可删除**：jsdom 不提供 `navigator.locks`，LightningFS 的 `DefaultBackend` 会因此回落到需要 `indexedDB` 的 `Mutex` 分支，删掉即全部测试报 `ReferenceError: indexedDB is not defined`。机理详见 `docs/milestones/M1-tasks.md` 的「实测环境事实」第 2 条。
 
@@ -115,7 +137,7 @@ pnpm smoke:ch4       # M5b 新增（第四章五关 + 远程协议 + 协作冲�
 ## 仓库状态与注意事项
 
 - **`.gitignore` 已补齐**（涵盖 `node_modules/`、`dist/`、日志、编辑器与系统文件等）。历史提交 `08361a4`、`d1a259c` 曾声称添加过它，但此前工作树中并不存在；现有文件为本仓库实际的忽略规则来源。
-- **`docs/milestones/` 存放里程碑相关的规划与检查文档**（每期一份，记录任务拆解与执行结果）：`M1-preflight.md`（M1 开工前的环境核查）、`M1-tasks.md`、`M2-tasks.md`、`M3-tasks.md`、`M4-tasks.md`。
+- **`docs/milestones/` 存放里程碑相关的规划与检查文档**（每期一份，记录任务拆解与执行结果）：`M1-preflight.md`（M1 开工前的环境核查）、`M1-tasks.md`、`M2-tasks.md`、`M3-tasks.md`、`M4-tasks.md`、`M5-tasks.md`、`M6-tasks.md`。
   - **文件名不带状态后缀** —— 完成状态由 `docs/milestones/README.md` 的索引表表达，**不要**再用 `-DONE` / `-TODO` 后缀命名（该约定已废弃）。
   - **新里程碑**直接在本目录新建 `<里程碑名>-tasks.md`（如 `M5-tasks.md`），并同步在 `docs/milestones/README.md` 补一行索引。
 - 设计文档（`game-design.md`、`development-refinement.md`）**已提交入库**，且成文于任何 `src/` 代码存在之前。本文件通篇引用的章节编号（§2–§14）目前在这些文档中是稳定的；但若你改动了这些文档，请同步更新此处的交叉引用。

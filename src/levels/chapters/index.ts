@@ -5,9 +5,7 @@
  * 不含任何判定/计分逻辑（那些在 `game/validate/` 与 M3 的 `game/scoring/`）。
  * UI 只经此处取关卡，不直接 import 具体章节文件 —— 这样新增章节时 UI 无需改动。
  *
- * ⚠️ 当前注册了 **ch1~ch5**（M4 的 1~3 章 + M5a 的第 5 章 + **M5b 的第 4 章**）。
- * ch6 与综合挑战 F 尚未落地，**不注册**，`getChapterLevels('ch6')` 会如实返回空数组
- * —— 不伪造占位关卡（§14）。（ch6 标签属 M6。）
+ * ⚠️ M6 起全部章节（ch1~ch6 + 综合挑战 F）均已注册 —— 全游戏可玩。
  */
 
 import type { ChapterId, Level } from '../../game/types';
@@ -16,6 +14,8 @@ import { CHAPTER_2_LEVELS } from './ch2';
 import { CHAPTER_3_LEVELS } from './ch3';
 import { CHAPTER_4_LEVELS } from './ch4';
 import { CHAPTER_5_LEVELS } from './ch5';
+import { CHAPTER_6_LEVELS } from './ch6';
+import { FINAL_CHAPTER_LEVELS } from './final';
 
 /** 章节元信息，供菜单/章节页渲染（§9.1） */
 export interface ChapterMeta {
@@ -80,26 +80,26 @@ export const CHAPTERS: readonly ChapterMeta[] = [
     order: 6,
     title: '历史锚点',
     subtitle: 'Git 标签管理 —— tag / show / describe',
-    playable: false,
+    playable: true,
   },
   {
     id: 'F',
     order: null,
     title: '大统一',
     subtitle: '综合挑战 —— 全部知识的汇聚',
-    playable: false,
+    playable: true,
   },
 ] as const;
 
-/** 章节 → 关卡列表。未实现的章节显式登记为空数组，让「无关卡」是**已知事实**而非漏注册 */
+/** 章节 → 关卡列表。全部章节均已有关卡（M6 收官） */
 const LEVELS_BY_CHAPTER: Record<ChapterId, readonly Level[]> = {
   ch1: CHAPTER_1_LEVELS,
   ch2: CHAPTER_2_LEVELS,
   ch3: CHAPTER_3_LEVELS,
   ch4: CHAPTER_4_LEVELS,
   ch5: CHAPTER_5_LEVELS,
-  ch6: [],
-  F: [],
+  ch6: CHAPTER_6_LEVELS,
+  F: FINAL_CHAPTER_LEVELS,
 };
 
 /**

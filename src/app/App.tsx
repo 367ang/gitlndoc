@@ -14,10 +14,11 @@ import { useEffect, useState } from 'react'
 import { useViewStore } from '../store/viewStore'
 import { hasSavedProgress } from '../persistence/boot'
 import { MenuScreen } from '../ui/components/menu/MenuScreen'
+import { IntroScreen } from '../ui/components/menu/IntroScreen'
+import { EndingScreen } from '../ui/components/menu/EndingScreen'
 import { ChapterScreen } from '../ui/components/chapter/ChapterScreen'
 import { LevelScreen } from '../ui/components/level/LevelScreen'
 import { LevelComplete } from '../ui/components/level/LevelComplete'
-import { ViewPlaceholder } from './ViewPlaceholder'
 import styles from './App.module.css'
 
 export interface AppProps {
@@ -68,14 +69,7 @@ export function App({ bootError }: AppProps) {
         return <p className={styles.boot}>正在校准时间线…</p>
 
       case 'intro':
-        return (
-          <ViewPlaceholder
-            view="intro"
-            description="每个章节都是一条被熵增撕裂的时间线。用真实的 Git 命令把它重新锚定。"
-            actionLabel="进入时间线检修台"
-            onAction={goMenu}
-          />
-        )
+        return <IntroScreen />
 
       case 'menu':
         return <MenuScreen />
@@ -92,14 +86,7 @@ export function App({ bootError }: AppProps) {
         return <LevelComplete />
 
       case 'gameComplete':
-        return (
-          <ViewPlaceholder
-            view="gameComplete"
-            description="终章与结局叙事属 M6。当前第一章已可完整通关。"
-            actionLabel="返回菜单"
-            onAction={goMenu}
-          />
-        )
+        return <EndingScreen />
     }
   }
 }

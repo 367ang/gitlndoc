@@ -193,7 +193,8 @@ describe('completion —— Tab 补全纯函数（M4）', () => {
   it('git log 后的 --oneline 候选来自白名单', () => {
     const result = completeAtEnd({ input: 'git log --', candidates: [] })
     // M5a 增补 --soft/--mixed/--hard/--amend/--no-edit。
-    // ⚠️ M5b 的 `-v` 是单横线旗标，不匹配 `--` 前缀，故不出现在本组候选中。
+    // ⚠️ M5b 的 `-v`、M6 的 `-d` 是单横线旗标，不匹配 `--` 前缀，故不出现在本组候选中。
+    //    M6 新增 `--tags`（git describe --tags）。
     expect(result.matches).toEqual([
       '--all',
       '--amend',
@@ -204,6 +205,7 @@ describe('completion —— Tab 补全纯函数（M4）', () => {
       '--oneline',
       '--soft',
       '--staged',
+      '--tags',
     ])
   })
 })

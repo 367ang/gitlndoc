@@ -934,7 +934,7 @@ describe('components —— LevelComplete（M3 结算）', () => {
   })
 })
 
-describe('components —— MenuScreen（M3 汇总与成就入口）', () => {
+describe('components —— MenuScreen（M3 汇总与成就入口，M6 收官增补结局入口）', () => {
   it('汇总条显示总得分 / 通关数 / 星级；成就面板默认收起', () => {
     useProgressStore.setState({
       levelRecords: {
@@ -946,8 +946,11 @@ describe('components —— MenuScreen（M3 汇总与成就入口）', () => {
     render(<MenuScreen />)
 
     expect(screen.getByTestId('total-score').textContent).toBe('215') // 145 + 70
-    expect(screen.getByTestId('achievement-toggle').textContent).toContain('1/5')
+    // ⚠️ M6 新增 perfect-game 成就（共 6 个）
+    expect(screen.getByTestId('achievement-toggle').textContent).toContain('1/6')
     expect(screen.queryByTestId('achievement-list')).toBeNull()
+    // 未通关全部主线 → 无结局入口
+    expect(screen.queryByTestId('ending-entry')).toBeNull()
   })
 
   it('点击成就按钮展开列表，已解锁与未解锁状态可区分', () => {
@@ -961,7 +964,7 @@ describe('components —— MenuScreen（M3 汇总与成就入口）', () => {
     const list = screen.getByTestId('achievement-list')
     expect(list).toBeTruthy()
     const items = list.querySelectorAll('li')
-    expect(items).toHaveLength(5)
+    expect(items).toHaveLength(6)
     expect(items[0]!.dataset.unlocked).toBe('true')
     expect(items[1]!.dataset.unlocked).toBe('false')
   })
@@ -1059,10 +1062,10 @@ describe('components —— M4 半拼骨架预填与章节解锁', () => {
   it('MenuScreen 未解锁章节显示 🔒 且按钮禁用（通关上一章全部关卡后解锁）', () => {
     useProgressStore.setState({ levelRecords: {}, achievements: [] })
     render(<MenuScreen />)
-    // ch1 恒解锁；ch2/ch3/ch4/ch5 因前置章未通关而锁
-    // ⚠️ M5a 起 ch5 已注册且 playable、**M5b 起 ch4 亦然** —— 两者都处于「未解锁」态，
-    //    故文案出现 **4** 次（M4 为 2 次、M5a 为 3 次；ch6/F 尚未 playable，不渲染锁定文案）。
-    expect(screen.getAllByText(/🔒 完成上一章全部关卡后解锁/)).toHaveLength(4)
+    // ch1 恒解锁；ch2~ch6 因前置章未通关而锁
+    // ⚠️ M6 起 ch6 已注册且 playable —— 锁定文案出现 **5** 次（M4 为 2 次、M5b 为 4 次；
+    //    F 也已 playable，但其「未解锁」走 🔒 同款文案，实为 6 次 —— F 的解锁条件是全部主线）。
+    expect(screen.getAllByText(/🔒 完成上一章全部关卡后解锁/)).toHaveLength(6)
     // ch2 的开始按钮被禁用
     const ch2Start = screen.getByLabelText('直接开始 ch2-1 状态感知')
     expect(ch2Start).toBeDisabled()

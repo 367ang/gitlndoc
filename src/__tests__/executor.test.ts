@@ -272,13 +272,13 @@ describe('executor —— 错误路径', () => {
     expect(result.error).toContain('需要跟上子命令');
   });
 
-  it('白名单外仍不支持的子命令返回「该版本不支持」而非执行（M5b 已实现 remote/clone/push/fetch/pull）', async () => {
+  it('白名单外仍不支持的子命令返回「该版本不支持」而非执行（M6 已实现 tag/show/describe）', async () => {
     // M5a 转正了第五章的 reset / restore / revert / reflog，
-    // M5b 转正了第四章的 remote / clone / push / fetch / pull —— 白名单外只剩
-    // stash（决策 ④ 明确不做）与 tag（属 M6）。
+    // M5b 转正了第四章的 remote / clone / push / fetch / pull，
+    // M6 转正了第六章的 tag / show / describe —— 白名单外只剩 stash（决策 ④ 明确不做）。
     // ⚠️ 历次转正都需收缩本用例的输入集合：转正后的命令不再报「不支持」，
     //    而是给出各自的用法提示（见紧随其后的 `git reset` 用例）。
-    for (const input of ['git stash', 'git tag v1.0', 'git stash pop']) {
+    for (const input of ['git stash', 'git stash pop']) {
       const result = await execute(input, { dir });
       expect(result.ok).toBe(false);
       expect(result.error).toContain('在当前版本中尚不支持');
@@ -1376,5 +1376,159 @@ describe('executor —— M5a 撤销：reflog 与恢复剧本（5-6 的引擎依
     const checkoutPathsEntry = await executeToEntry('git checkout -- a.txt', { dir });
     expect(checkoutPathsEntry.ok).toBe(true);
     expect(checkoutPathsEntry.undoable).toBe(true);
+  });
+});
+
+describe('executor —— M6 标签：tag / show / describe（第六章「历史锚点」）', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = freshRepo();
+  });
+
+  /** 预置：init + 两次提交（第二个提交是 HEAD） */
+  async function seedTwoCommits(): Promise<void> {
+    await execute('git init', { dir });
+    await writeRepoFile('/repo/a.txt', 'v1\n');
+    await execute('git add a.txt', { dir });
+    await execute('git commit -m "第一次提交"', { dir });
+    await writeRepoFile('/repo/a.txt', 'v2\n');
+    await execute('git add a.txt', { dir });
+    await execute('git commit -m "第二次提交"', { dir });
+  }
+
+  it('git tag <名> 创建轻量标签并回显；git tag 列出全部', async () => {
+    await seedTwoCommits();
+
+    const created = await execute('git tag v1.0', { dir });
+    expect(created.ok).toBe(true);
+    expect(created.output[0]).toContain('轻量标签 v1.0');
+
+    const listed = await execute('git tag', { dir });
+    expect(listed.ok).toBe(true);
+    expect(listed.output).toEqual(['v1.0']);
+  });
+
+  it('git tag -a -m 创建注解标签；空仓库 / 重复名 / 无 -m 的注解都被正确拒绝', async () => {
+    await seedTwoCommits();
+
+    const annotated = await execute('git tag -a v2.0 -m "正式版本"', { dir });
+    expect(annotated.ok).toBe(true);
+    expect(annotated.output[0]).toContain('注解标签 v2.0');
+
+    // 重复创建 → 拒绝（对齐真 git AlreadyExistsError）
+    const dup = await execute('git tag v2.0', { dir });
+    expect(dup.ok).toBe(false);
+    expect(dup.error).toContain('已存在');
+
+    // -a 不带 -m → 明确提示（本游戏无编辑器）
+    const noMessage = await execute('git tag -a v3.0', { dir });
+    expect(noMessage.ok).toBe(false);
+    expect(noMessage.error).toContain('-m');
+
+    // 空仓库 → 标签必须锚定提交
+    const emptyDir = freshRepo();
+    await execute('git init', { emptyDir } as never);
+    const unborn = await execute('git tag v0', { dir: emptyDir });
+    expect(unborn.ok).toBe(false);
+    expect(unborn.error).toContain('没有任何提交');
+  });
+
+  it('git tag <名> <目标> 可以锚定历史提交（ref 表达式支持）', async () => {
+    await seedTwoCommits();
+
+    const result = await execute('git tag v0.9 HEAD~1', { dir });
+    expect(result.ok).toBe(true);
+    expect(result.output[0]).toContain('锚定');
+
+    // 标签锚定的是第一次提交（HEAD~1）——用 show 验证
+    const shown = await execute('git show v0.9', { dir });
+    expect(shown.ok).toBe(true);
+    expect(shown.output.join('\n')).toContain('第一次提交');
+  });
+
+  it('git tag -d 删除标签并回显；删除不存在的标签报错', async () => {
+    await seedTwoCommits();
+    await execute('git tag v1.0', { dir });
+
+    const deleted = await execute('git tag -d v1.0', { dir });
+    expect(deleted.ok).toBe(true);
+    expect(deleted.output[0]).toContain('已删除标签 v1.0');
+
+    const missing = await execute('git tag -d v1.0', { dir });
+    expect(missing.ok).toBe(false);
+    expect(missing.error).toContain('找不到标签');
+  });
+
+  it('git show：注解标签输出注解信息；不存在的标签报错', async () => {
+    await seedTwoCommits();
+    await execute('git tag -a v2.0 -m "正式版本发布"', { dir });
+
+    const shown = await execute('git show v2.0', { dir });
+    expect(shown.ok).toBe(true);
+    const text = shown.output.join('\n');
+    expect(text).toContain('标签 v2.0');
+    expect(text).toContain('正式版本发布');
+    expect(text).toContain('第二次提交');
+
+    const missing = await execute('git show v9.9', { dir });
+    expect(missing.ok).toBe(false);
+    expect(missing.error).toContain('找不到标签');
+  });
+
+  it('git describe：无标签报「没有可描述」；落标签后输出标签名；历史提交上输出 <tag>-<n>-g<hash>', async () => {
+    await seedTwoCommits();
+
+    const none = await execute('git describe', { dir });
+    expect(none.ok).toBe(false);
+    expect(none.error).toContain('没有可描述');
+
+    // 打在 HEAD~1（注解标签）→ describe 输出 v0.9-1-g<短hash>
+    await execute('git tag -a v0.9 -m "早期版本" HEAD~1', { dir });
+    const described = await execute('git describe', { dir });
+    expect(described.ok).toBe(true);
+    expect(described.output[0]).toMatch(/^v0\.9-1-g[0-9a-f]{7}$/);
+
+    // 打在 HEAD → 干净的标签名
+    await execute('git tag -a v1.0 -m "当前版本"', { dir });
+    const atHead = await execute('git describe', { dir });
+    expect(atHead.output[0]).toBe('v1.0');
+  });
+
+  it('git describe 缺省忽略轻量标签，--tags 纳入（真 git 的注解优先语义）', async () => {
+    await seedTwoCommits();
+    await execute('git tag v-light', { dir });
+
+    const withoutFlag = await execute('git describe', { dir });
+    expect(withoutFlag.ok).toBe(false);
+    expect(withoutFlag.error).toContain('注解标签');
+
+    const withFlag = await execute('git describe --tags', { dir });
+    expect(withFlag.ok).toBe(true);
+    expect(withFlag.output[0]).toBe('v-light');
+  });
+
+  it('push 的分支参数是标签名时改走标签推送（git push origin <tag> 的二义性解析）', async () => {
+    await seedTwoCommits();
+    // 建立远程关联（写配置绕过白名单 —— 4-1 语义由其自身关卡测试覆盖）
+    const { writeRemoteConfig, ALLOWED_REMOTE_URL } = await import('../engine/gitApi');
+    const { resetRemoteRepo } = await import('../engine/fileRemote');
+    await resetRemoteRepo();
+    const seeded = await writeRemoteConfig('origin', ALLOWED_REMOTE_URL, { dir });
+    expect(seeded.ok).toBe(true);
+
+    // 推 main 建立共同历史，再打标签推送
+    const pushed = await execute('git push origin main', { dir });
+    expect(pushed.ok).toBe(true);
+    await execute('git tag -a v1.0 -m "首个标签"', { dir });
+
+    const pushedTag = await execute('git push origin v1.0', { dir });
+    expect(pushedTag.ok).toBe(true);
+    expect(pushedTag.output.join('\n')).toContain('标签已推送');
+
+    // 裸仓里真的有这个标签（事实断言）
+    const git = (await import('isomorphic-git')).default;
+    const tagOid = await git.resolveRef({ fs: (await import('../engine/fs')).getFs(), dir: '/remote.git', gitdir: '/remote.git', ref: 'refs/tags/v1.0' });
+    expect(tagOid).toBeDefined();
   });
 });

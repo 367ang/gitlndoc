@@ -330,38 +330,64 @@ describe('targetState —— 提交历史（commitCount / commitMessage / commit
   })
 })
 
-describe('targetState —— 尚未实现的类型（§14 明确报「尚未实现」而非静默通过）', () => {
-  it('tag 一律 ok:false 且 implemented:false（M5b 起 remote 已转正）', async () => {
+describe('targetState —— tag 目标（M6，第六章「历史锚点」）', () => {
+  beforeEach(async () => {
     await freshSandbox()
-
-    const unimplemented: TargetCondition[] = [{ type: 'tag', name: 'v1.0', exists: true }]
-
-    const state = await evaluateTargets(unimplemented)
-
-    expect(state.satisfied).toBe(false)
-    expect(state.remaining).toBe(1)
-    for (const [index, result] of state.results.entries()) {
-      // 即便条件本身「看起来该成立」，也不能静默通过
-      expect(result.implemented).toBe(false)
-      expect(result.ok).toBe(false)
-      expect(result.detail).toContain('尚未实现')
-      expect(result.detail).toContain(unimplemented[index].type)
-    }
   })
 
-  it('与已实现条件混合时，未实现项会把整关拖成未达成', async () => {
+  it('未创建标签时 exists:true 不成立，创建后成立；-d 删除后 exists:false 成立', async () => {
     await freshSandbox()
+    // 标签必须锚定在提交上 —— 先归档一次（空仓库下 git tag 会被正确拒绝）
     await commitFile('/repo/a.txt', '1\n', '第一次快照')
 
-    const state = await evaluateTargets([
-      { type: 'commitCount', op: 'gte', value: 1 },
-      { type: 'tag', name: 'v1.0', exists: true },
-    ])
+    // 创建前：没有任何标签
+    const before = await evaluateTargets([{ type: 'tag', name: 'v1.0', exists: true }])
+    expect(before.satisfied).toBe(false)
+    expect(before.results[0].implemented).toBe(true)
+    expect(before.results[0].detail).toContain('还没有名为「v1.0」的标签')
 
+    // 创建标签后判定成立
+    const created = await execute('git tag v1.0')
+    expect(created.ok).toBe(true)
+    const after = await evaluateTargets([{ type: 'tag', name: 'v1.0', exists: true }])
+    expect(after.satisfied).toBe(true)
+    expect(after.results[0].detail).toContain('v1.0')
+
+    // 删除后 exists:false 成立（exists:true 转为不成立）
+    await execute('git tag -d v1.0')
+    const deleted = await evaluateTargets([
+      { type: 'tag', name: 'v1.0', exists: true },
+      { type: 'tag', name: 'v1.0', exists: false },
+    ])
+    expect(deleted.results[0].ok).toBe(false)
+    expect(deleted.results[1].ok).toBe(true)
+  })
+
+  it('注解标签与轻量标签都能被判定', async () => {
+    await commitFile('/repo/a.txt', '1\n', '第一次快照')
+
+    const light = await execute('git tag v-light')
+    const annotated = await execute('git tag -a v-annot -m "注解版"')
+    expect(light.ok).toBe(true)
+    expect(annotated.ok).toBe(true)
+
+    const state = await evaluateTargets([
+      { type: 'tag', name: 'v-light', exists: true },
+      { type: 'tag', name: 'v-annot', exists: true },
+    ])
+    expect(state.satisfied).toBe(true)
+  })
+
+  it('大小写敏感：v1.0 与 V1.0 是两个不同的标签', async () => {
+    await commitFile('/repo/a.txt', '1\n', '第一次快照')
+    await execute('git tag v1.0')
+
+    const state = await evaluateTargets([
+      { type: 'tag', name: 'v1.0', exists: true },
+      { type: 'tag', name: 'V1.0', exists: true },
+    ])
     expect(state.results[0].ok).toBe(true)
     expect(state.results[1].ok).toBe(false)
-    expect(state.satisfied).toBe(false)
-    expect(state.remaining).toBe(1)
   })
 })
 

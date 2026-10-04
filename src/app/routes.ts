@@ -20,7 +20,7 @@ export const VIEW_ORDER: readonly View[] = [
   'gameComplete',
 ] as const
 
-/** 各视图的中文标题（M1 用于占位页与文档提示，M2 起由各视图自行排版） */
+/** 各视图的中文标题（供调试与文档索引使用；各视图自行排版后不再依赖本表渲染） */
 export const VIEW_TITLE: Record<View, string> = {
   boot: '正在校准时间线…',
   intro: '开场叙事',
@@ -30,9 +30,3 @@ export const VIEW_TITLE: Record<View, string> = {
   levelComplete: '关卡结算',
   gameComplete: '结局',
 }
-
-/**
- * M1 实现进度：`boot` / `level` 为真实实现，其余为占位（M2 起按 §9.1 补齐）。
- * 供占位组件显示「此视图属后续里程碑」，避免玩家误以为功能缺失。
- */
-export const M1_VIEWS: readonly View[] = ['boot', 'level'] as const

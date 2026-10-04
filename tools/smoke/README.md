@@ -27,6 +27,8 @@ pnpm smoke:legacy   # node tools/smoke/run-legacy.cjs
 pnpm smoke:ch2      # node tools/smoke/run-ch2.cjs
 pnpm smoke:ch3      # node tools/smoke/run-ch3.cjs
 pnpm smoke:ch5      # node tools/smoke/run-ch5.cjs   ← M5a 新增
+pnpm smoke:ch4      # node tools/smoke/run-ch4.cjs   ← M5b 新增
+pnpm smoke:ch6      # node tools/smoke/run-ch6.cjs   ← M6 新增
 ```
 
 四段**互相独立**，必须分别运行（每段自行 `connect()` → `resetStorage()` → `openApp()` → 播种/通关 → 断言）。四段合计 **64/64**（8 + 8 + 15 + 33），ch5 段两轮连跑无 flake。
@@ -41,6 +43,7 @@ pnpm smoke:ch5      # node tools/smoke/run-ch5.cjs   ← M5a 新增
 | [run-ch2.cjs](run-ch2.cjs) | 8/8 | **段1**：种子 ch1 全通关 → 验 ch2 解锁 / ch3 仍锁定 → 2-1（status 探查 + probeBonus）→ 2-2/2-3（编辑器）→ 2-4（`rm` 真删 + `.gitignore` + workdirClean）→ ch3 解锁 |
 | [run-ch3.cjs](run-ch3.cjs) | 15/15 | **段2**：种子 ch1+ch2 全通关 → 半拼骨架预填断言（3-1~3-6 进关即验 `command-preview`）→ branch/checkout/switch → 3-3 ff 合并 → **3-4 冲突消解全链路** → 3-5 rebase + logOrder → 3-6 → GitGraph/BranchPanel 渲染 → 汇总 → **ch5 解锁链路**（M5a 追加） |
 | [run-ch5.cjs](run-ch5.cjs) | **41/41** | **段4（M5a）**：free 模式真实键盘输入 → `commit --amend`（替换而非追加）→ `restore --staged`（保住工作区）→ `restore` 找回误删 → `revert` 反向提交 → **5-6 完整「误 reset --hard → reflog → `HEAD@{1}` 恢复」剧本** → 进度落 localStorage 且 **reload 后仍在**（清偿 M4 遗留 1） |
+| [run-ch6.cjs](run-ch6.cjs) | **25/25** | **段6（M6）**：种子 ch1~ch5 → 菜单解锁态双向断言（ch6 可玩 / 结局入口未出现）→ free 模式五关通关（轻量标签 / 注解标签 / 预置标签查看 + 归档命名 / 版本发布）→ GitGraph 标签徽标 → 全部主线通关后「进入结局」入口出现 → 结局页叙事与统计 |
 
 共享库 [cdp-client.cjs](cdp-client.cjs) 导出 `connect` / `openApp` / `waitFor` / `evalJs` / `check` / `summarize` / `seedProgress` / `enterLevel` / `waitSettled` / `backToMenu` / `clickFrag` / `runCommand` / `typeSuffix` / `editFile` / `runAdd` / `runCommit` / `runGit` / `installCounter`，以及 M5a 新增的 `runFree` / `latestHistory` / `reload` / `resetStorage`。
 

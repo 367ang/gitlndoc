@@ -14,7 +14,8 @@
     "smoke:ch2": "node tools/smoke/run-ch2.cjs",
     "smoke:ch3": "node tools/smoke/run-ch3.cjs",
     "smoke:ch5": "node tools/smoke/run-ch5.cjs",
-    "smoke:ch4": "node tools/smoke/run-ch4.cjs"
+    "smoke:ch4": "node tools/smoke/run-ch4.cjs",
+    "smoke:ch6": "node tools/smoke/run-ch6.cjs"
   },
   "dependencies": {
     "@isomorphic-git/lightning-fs": "^4.9.0",

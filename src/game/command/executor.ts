@@ -31,22 +31,29 @@ import {
   checkoutPaths as gitCheckoutPaths,
   clone as gitClone,
   commit as gitCommit,
+  createTag as gitCreateTag,
   deleteRemote as gitDeleteRemote,
+  deleteTag as gitDeleteTag,
+  describe as gitDescribe,
   diff as gitDiff,
   fetch as gitFetch,
   init as gitInit,
   listBranches as gitListBranches,
   listRemotes as gitListRemotes,
+  listTags as gitListTags,
   log as gitLog,
   logAll as gitLogAll,
+  logWithRef as gitLogWithRef,
   merge as gitMerge,
   pull as gitPull,
   push as gitPush,
+  pushTag as gitPushTag,
   rebase as gitRebase,
   reflog as gitReflog,
   remove as gitRemove,
   removePaths as gitRemovePaths,
   reset as gitReset,
+  resolveTagTarget as gitResolveTagTarget,
   restore as gitRestore,
   revert as gitRevert,
   status as gitStatus,
@@ -593,6 +600,24 @@ export async function execute(input: string, options: ExecuteOptions = {}): Prom
 
     case 'push': {
       const remote = command.remote ?? 'origin';
+      // ⚠️ 分支参数可能是**标签名**（`git push origin v1.0.0`，M6 服务 6-4「推送锚点」）：
+      //    先查标签表（`refs/tags/<名>`）—— 命中即走标签推送；
+      //    未命中再按分支处理（含「分支不存在」的原生报错路径）。
+      //    ⚠️ 不能用 resolveRef 判定：它对未知名字会按「完整引用名」回退，
+      //    `v1.0` 会被解析到 `refs/tags/v1.0`，误把标签当成分支（实测踩到）。
+      if (command.branch !== undefined) {
+        const ref = command.branch;
+        const tags = await gitListTags(repoOptions);
+        if (tags.ok && tags.value.some((tag) => tag.name === ref)) {
+          return unwrap(await gitPushTag(remote, ref, repoOptions), tokens, () =>
+            succeed(tokens, [
+              `To ${remote}`,
+              `   [new tag]           ${ref} -> ${ref}`,
+              `标签已推送 —— 远程宇宙现在也锚定了这个版本。`,
+            ]),
+          );
+        }
+      }
       const branch = command.branch ?? DEFAULT_BRANCH;
       return unwrap(await gitPush(remote, { ...repoOptions, ref: branch }), tokens, () =>
         succeed(tokens, [
@@ -638,6 +663,96 @@ export async function execute(input: string, options: ExecuteOptions = {}): Prom
         ]);
       });
     }
+
+    // ── M6：第六章「历史锚点」───────────────────────────────────────────
+    case 'tag': {
+      // 列出标签（`git tag` 无参数）—— 输出对齐真 git：一行一个标签名
+      if (command.action === 'list') {
+        return unwrap(await gitListTags(repoOptions), tokens, (tags) => {
+          if (tags.length === 0) return succeed(tokens, ['（还没有任何标签 —— 用 git tag <名称> 创建一个）']);
+          return succeed(tokens, tags.map((tag) => tag.name));
+        });
+      }
+
+      // 删除标签（`git tag -d <名>`）—— 回显对齐真 git 的 `Deleted tag ... (was <hash>)`
+      if (command.action === 'delete') {
+        const name = command.name as string;
+        return unwrap(await gitDeleteTag(name, repoOptions), tokens, (deleted) =>
+          succeed(tokens, [`已删除标签 ${deleted.name}（曾指向 ${deleted.shortHash}）`]),
+        );
+      }
+
+      // 创建标签：`-a` 时必须已有 -m（grammar 已拦），这里按两分法分发
+      const name = command.name as string;
+      return unwrap(
+        await gitCreateTag(name, {
+          ...repoOptions,
+          ...(command.message !== undefined ? { message: command.message } : {}),
+          ...(command.target !== undefined ? { target: command.target } : {}),
+        }),
+        tokens,
+        (result) =>
+          succeed(tokens, [
+            result.annotated
+              ? `已创建注解标签 ${result.name}（锚定 ${result.shortHash}）`
+              : `已创建轻量标签 ${result.name}（锚定 ${result.shortHash}）`,
+          ]),
+      );
+    }
+
+    case 'show': {
+      const name = command.name;
+      const resolved = await gitResolveTagTarget(name, repoOptions);
+      if (!resolved.ok) return failWith(tokens, renderError(resolved.error));
+      if (resolved.value === null) {
+        return failWith(
+          tokens,
+          `找不到标签「${name}」。`,
+        );
+      }
+
+      const { oid, annotated } = resolved.value;
+      // 目标提交的信息：按 oid 读提交历史首条（logWithRef 支持从任意 ref 取历史）
+      const logResult = await gitLogWithRef(oid, { ...repoOptions, depth: 1 });
+      if (!logResult.ok) return failWith(tokens, renderError(logResult.error));
+      const commit = logResult.value[0];
+      if (commit === undefined) {
+        return failWith(tokens, `标签「${name}」指向的提交无法读取。`);
+      }
+
+      // 输出对齐真 git 的观感：注解标签先打 tag 对象的元信息，再给提交摘要
+      const lines: string[] = [];
+      if (annotated) {
+        const tags = await gitListTags(repoOptions);
+        const message = tags.ok ? tags.value.find((tag) => tag.name === name)?.message : undefined;
+        lines.push(`标签 ${name}`);
+        lines.push(`指向提交：${commit.shortHash}`);
+        if (message !== undefined) lines.push(`注解：${message}`);
+        lines.push('');
+      } else {
+        lines.push(`标签 ${name}（轻量）`);
+        lines.push('');
+      }
+      lines.push(`提交 ${commit.hash}`);
+      lines.push(`作者：${commit.author} <${commit.authorEmail}>`);
+      for (const line of commit.message.split('\n')) {
+        lines.push(`    ${line}`);
+      }
+      return succeed(tokens, lines);
+    }
+
+    case 'describe':
+      return unwrap(await gitDescribe({ ...repoOptions, tags: command.tags }), tokens, (result) => {
+        if (result === null) {
+          return failWith(
+            tokens,
+            command.tags
+              ? '没有可描述的标签 —— 从当前提交出发的历史上找不到任何标签。'
+              : '没有可描述的注解标签 —— 注解标签才能被 describe 缺省找到（轻量标签需 --tags）。',
+          );
+        }
+        return succeed(tokens, [result]);
+      });
 
     default:
       // SUPPORTED_VERBS 已由 grammar 收敛，此处不可达

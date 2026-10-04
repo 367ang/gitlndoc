@@ -15,7 +15,7 @@
 //    两次调用都发生在**点击回调**里，不在 effect 中（原因见 `startLevel.ts`）。
 
 import { useEffect, useRef, useState } from 'react'
-import { getChapterLevels, getLevel } from '../../../levels/chapters'
+import { getAllLevels, getChapterLevels, getLevel } from '../../../levels/chapters'
 import { leaveLevel, startLevel } from '../../../app/startLevel'
 import { useSessionStore } from '../../../store/sessionStore'
 import { useProgressStore } from '../../../store/progressStore'
@@ -66,12 +66,18 @@ export function LevelComplete() {
     // 落库：星级用 0 兜底（ScoreResult.stars 已含 0~3 全域）
     setLevelRecord(level.id, { score: result.score, stars: result.stars, cleared: true })
 
-    // 成就判定：取结算后的本章记录（含刚写入的本关），判「完美篇章」
+    // 成就判定：取结算后的本章记录（含刚写入的本关），判「完美篇章」；
+    // M6 起同时取全游戏记录判「完美通关」（全部章节落地后口径固定）。
     const progress = useProgressStore.getState()
     const chapterStars: Record<string, number> = {}
     for (const sibling of getChapterLevels(level.chapter)) {
       const record = progress.levelRecords[sibling.id]
       if (record !== undefined) chapterStars[sibling.id] = record.stars
+    }
+    const gameStars: Record<string, number> = {}
+    for (const sibling of getAllLevels()) {
+      const record = progress.levelRecords[sibling.id]
+      if (record !== undefined) gameStars[sibling.id] = record.stars
     }
     const earned = evaluateAchievements(
       {
@@ -82,6 +88,8 @@ export function LevelComplete() {
         chapter: level.chapter,
         chapterStars,
         chapterLevelCount: getChapterLevels(level.chapter).length,
+        gameStars,
+        gameLevelCount: getAllLevels().length,
       },
       progress.achievements,
     )

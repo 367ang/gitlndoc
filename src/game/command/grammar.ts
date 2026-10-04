@@ -4,11 +4,12 @@
  * 职责：把 token 数组解析成 `git <verb> [flags] [args]` 结构，校验参数个数与合法性，
  * 产出**规范化的判别联合参数对象**。本层只做「认不认得」，不碰 git、不执行任何东西。
  *
- * ⚠️ M5b 起的白名单：`init` / `add` / `commit` / `status` / `log` / `branch` /
+ * ⚠️ M6 起的白名单：`init` / `add` / `commit` / `status` / `log` / `branch` /
  * `checkout` / `switch` / `merge` / `rebase` / `rm` / `diff` /
  * `reset` / `restore` / `revert` / `reflog`（第五章「时空回溯」）/
- * **`remote` / `clone` / `push` / `fetch` / `pull`**（第四章「星际连接」）。
- * 其余子命令（tag / stash …）返回
+ * `remote` / `clone` / `push` / `fetch` / `pull`（第四章「星际连接」）/
+ * **`tag` / `show` / `describe`**（第六章「历史锚点」）。
+ * 其余子命令（stash …）返回
  * `kind: 'unsupported'` 的校验结果 ——
  * 依据 §14「grammar 层做子集白名单，超出范围给『该版本不支持』提示而非假装执行」，
  * 绝不落到执行层。
@@ -17,7 +18,7 @@
  * 与 `engine/errors.ts::GitUnsupportedError` 的文案保持一致，见 `unsupportedMessage()`。
  */
 
-/** M5b 支持解析的 verb 白名单 */
+/** M6 支持解析的 verb 白名单（前序里程碑的命令全部保留） */
 export const SUPPORTED_VERBS = [
   'init',
   'add',
@@ -42,6 +43,10 @@ export const SUPPORTED_VERBS = [
   'push',
   'fetch',
   'pull',
+  // M6：第六章「历史锚点」
+  'tag',
+  'show',
+  'describe',
 ] as const;
 
 
@@ -233,6 +238,40 @@ export interface PullCommand {
   branch?: string;
 }
 
+// ── M6：第六章「历史锚点」的三个命令 ────────────────────────────────────────
+
+/** `git tag` 的规范化参数（M6） */
+export interface TagCommand {
+  verb: 'tag';
+  /**
+   * 动作：`list`（无参数列表）| `create`（创建）| `delete`（`-d`）。
+   * `-l <pattern>` 的筛选属进阶，不在本版本范围（命中即拒绝）。
+   */
+  action: 'list' | 'create' | 'delete';
+  /** `create` / `delete` 的标签名 */
+  name?: string;
+  /** `create -a`：是否为注解标签（仅 create 有意义） */
+  annotate?: boolean;
+  /** `create -a -m <msg>`：注解信息 */
+  message?: string;
+  /** `create <name> [<commit>]`：可选目标（分支名 / hash / ref 表达式），缺省 HEAD */
+  target?: string;
+}
+
+/** `git show <tag>` 的规范化参数（M6）—— 本版本仅支持查看标签 */
+export interface ShowCommand {
+  verb: 'show';
+  /** 要查看的标签名 */
+  name: string;
+}
+
+/** `git describe [--tags]` 的规范化参数（M6） */
+export interface DescribeCommand {
+  verb: 'describe';
+  /** `--tags`：轻量标签也纳入（真 git 缺省只看注解标签） */
+  tags: boolean;
+}
+
 /** 命令参数的判别联合 */
 export type ParsedCommand =
   | InitCommand
@@ -254,7 +293,10 @@ export type ParsedCommand =
   | CloneCommand
   | PushCommand
   | FetchCommand
-  | PullCommand;
+  | PullCommand
+  | TagCommand
+  | ShowCommand
+  | DescribeCommand;
 
 
 /** 校验失败的类别，供 UI 决定呈现方式（提示 / 报错 / 警告） */
@@ -363,6 +405,13 @@ export function parse(tokens: string[]): GrammarResult {
       return parseFetch(rest);
     case 'pull':
       return parsePull(rest);
+    // M6：第六章「历史锚点」
+    case 'tag':
+      return parseTag(rest);
+    case 'show':
+      return parseShow(rest);
+    case 'describe':
+      return parseDescribe(rest);
     default:
       // SUPPORTED_VERBS 已在上方过滤，此处不可达；保留以满足穷尽性检查
       return fail('unsupported', unsupportedMessage(verb));
@@ -1043,5 +1092,153 @@ function parsePull(args: string[]): GrammarResult {
   if (parsed.remote !== undefined) command.remote = parsed.remote;
   if (parsed.branch !== undefined) command.branch = parsed.branch;
   return { ok: true, command };
+}
+
+// ── M6：第六章「历史锚点」的三个命令 ────────────────────────────────────────
+
+/**
+ * `git tag` / `git tag <name> [<commit>]` / `git tag -a <name> -m <msg> [<commit>]` /
+ * `git tag -d <name>`（M6，服务 6-1 ~ 6-5）。
+ *
+ * 笔记 `git-tags.md` 的核心两分法：轻量 = `git tag <名>`；注解 = `git tag -a <名> -m <信息>`。
+ * ⚠️ 与真 git 对齐的拒绝项：
+ *   - `-d` 与创建参数混用（真 git 同样拒绝）；
+ *   - `-a` 不带 `-m`（真 git 会打开编辑器，本游戏无编辑器，明确提示）；
+ *   - `-l` / `--contains` / `-s` 等选项属本版本范围外，给出「该版本不支持」式提示。
+ */
+function parseTag(args: string[]): GrammarResult {
+  let deleteMode = false;
+  let annotate = false;
+  let message: string | undefined;
+  const positional: string[] = [];
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+
+    if (arg === '-d' || arg === '--delete') {
+      deleteMode = true;
+      continue;
+    }
+    if (arg === '-a' || arg === '--annotate') {
+      annotate = true;
+      continue;
+    }
+    if (arg === '-m' || arg === '--message') {
+      const value = args[i + 1];
+      if (value === undefined) {
+        return fail('invalid-usage', 'git tag -m 后面需要跟上标签信息。');
+      }
+      message = value;
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('--message=')) {
+      message = arg.slice('--message='.length);
+      continue;
+    }
+    // `-l` / `-s` / `--contains` 等：本版本明确不支持（§14 提示而非静默忽略）
+    if (arg === '-l' || arg === '--list' || arg === '-s' || arg === '--sign' || arg === '--contains' || arg === '-f' || arg === '--force') {
+      return fail('invalid-usage', `git tag ${arg} 在当前版本中尚不支持（本版本支持创建 / 列出 / 删除）。`);
+    }
+    if (isFlag(arg)) {
+      return fail('invalid-usage', `git tag 暂不支持选项 ${arg}。`);
+    }
+    positional.push(arg);
+  }
+
+  if (deleteMode) {
+    if (annotate || message !== undefined) {
+      return fail('invalid-usage', 'git tag -d 只接受一个标签名，不能与创建选项（-a / -m）混用。');
+    }
+    if (positional.length !== 1) {
+      return fail('invalid-usage', 'git tag -d 需要恰好一个标签名，例如：git tag -d v1.0.0');
+    }
+    const [name] = positional;
+    if (!isValidTagName(name)) {
+      return fail('invalid-usage', `「${name}」不是有效的标签名。${TAG_NAME_HINT}`);
+    }
+    return { ok: true, command: { verb: 'tag', action: 'delete', name } };
+  }
+
+  if (positional.length === 0) {
+    // 无参数 = 列出标签；`-a` / `-m` 单独出现属误用
+    if (annotate || message !== undefined) {
+      return fail('invalid-usage', 'git tag -a 需要一个标签名，例如：git tag -a v1.0.0 -m "发布说明"');
+    }
+    return { ok: true, command: { verb: 'tag', action: 'list' } };
+  }
+
+  if (positional.length > 2) {
+    return fail('invalid-usage', 'git tag 最多接受「标签名 + 可选的提交」两个参数。');
+  }
+  const [name, target] = positional;
+  if (!isValidTagName(name)) {
+    return fail('invalid-usage', `「${name}」不是有效的标签名。${TAG_NAME_HINT}`);
+  }
+  if (target !== undefined && !isPlausibleRef(target)) {
+    return fail('invalid-usage', `「${target}」不是有效的提交。${REF_HINT}`);
+  }
+  if (annotate && message === undefined) {
+    // 真 git 会打开编辑器写注解 —— 本游戏没有编辑器，明确提示而不是伪造
+    return fail('invalid-usage', '注解标签需要 -m 提供信息，例如：git tag -a v1.0.0 -m "版本 1.0.0 发布"');
+  }
+  return {
+    ok: true,
+    command: { verb: 'tag', action: 'create', name, annotate, ...(message !== undefined ? { message } : {}), ...(target !== undefined ? { target } : {}) },
+  };
+}
+
+
+/**
+ * 标签名的最小合法性（与分支名同款约束）。
+ * 真 git 还禁若干字符与 `--` 开头，教学场景下「非空、无空白、不以 - 开头、无 ..」已够用，
+ * 与 isValidBranchName / isValidRemoteName 保持一致（不复制真 git 的完整字符表）。
+ */
+function isValidTagName(name: string): boolean {
+  return name.length > 0 && !name.startsWith('-') && !/\s/.test(name) && !name.includes('..');
+}
+
+const TAG_NAME_HINT = '标签名不能包含空格，且不能以 - 开头。';
+
+/**
+ * `git show <tag>`（M6，服务 6-3「列出与查看」）。
+ *
+ * ⚠️ 真 git 的 show 还能看提交 / blob —— 本版本仅支持标签（注解与轻量皆可）：
+ * 传分支名/提交 hash 会得到「本版本仅支持查看标签」的提示，而不是装作执行。
+ */
+function parseShow(args: string[]): GrammarResult {
+  if (args.length === 0) {
+    return fail('invalid-usage', 'git show 需要一个标签名，例如：git show v1.0.0');
+  }
+  if (args.length > 1) {
+    return fail('invalid-usage', 'git show 一次只能查看一个标签。');
+  }
+  const flag = args.find((arg) => isFlag(arg));
+  if (flag !== undefined) {
+    return fail('invalid-usage', `git show 暂不支持选项 ${flag}。`);
+  }
+  const [name] = args;
+  if (!isValidTagName(name)) {
+    return fail('invalid-usage', `「${name}」不是有效的标签名。${TAG_NAME_HINT}`);
+  }
+  return { ok: true, command: { verb: 'show', name } };
+}
+
+/**
+ * `git describe [--tags]`（M6，服务 6-5「版本发布」的「版本号从哪来」教学点）。
+ *
+ * 真 git 缺省**只看注解标签**；`--tags` 才把轻量标签纳入 —— 这个差异正是笔记
+ * `git-tags.md` 推荐发布用注解标签的原因之一，故如实复刻。
+ */
+function parseDescribe(args: string[]): GrammarResult {
+  let tags = false;
+  for (const arg of args) {
+    if (arg === '--tags') {
+      tags = true;
+      continue;
+    }
+    return fail('invalid-usage', `git describe 暂不支持参数 ${arg}（本版本仅支持无参数与 --tags）。`);
+  }
+  return { ok: true, command: { verb: 'describe', tags } };
 }
 

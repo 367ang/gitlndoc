@@ -18,7 +18,6 @@ import { useViewStore } from '../../../store/viewStore'
 import { ACHIEVEMENTS } from '../../../game/scoring/achievements'
 import { isChapterUnlocked } from '../../../game/progression'
 import styles from './MenuScreen.module.css'
-
 /** 星级显示：★ 实心 / ☆ 空心；0 星显示「—」 */
 export function starText(stars: number): string {
   if (stars <= 0) return '—'
@@ -27,6 +26,7 @@ export function starText(stars: number): string {
 
 export function MenuScreen() {
   const goChapter = useViewStore((state) => state.goChapter)
+  const goGameComplete = useViewStore((state) => state.goGameComplete)
   const levelRecords = useProgressStore((state) => state.levelRecords)
   const achievements = useProgressStore((state) => state.achievements)
   const [error, setError] = useState<string | null>(null)
@@ -39,6 +39,9 @@ export function MenuScreen() {
   const clearedCount = allLevels.filter((level) => levelRecords[level.id]?.cleared === true).length
   const totalStars = allLevels.reduce((sum, level) => sum + (levelRecords[level.id]?.stars ?? 0), 0)
   const maxStars = allLevels.length * 3
+  // 结局入口（M6）：全部主线（六章）通关后，菜单显示「进入结局」——
+  // 终章 F 可选挑战，不挡结局（F 通关与否只影响 perfect-game 成就）。
+  const mainCleared = isChapterUnlocked('F', levelRecords)
 
   async function handleStart(levelId: string) {
     setError(null)
@@ -78,6 +81,16 @@ export function MenuScreen() {
             成就 {achievements.length}/{ACHIEVEMENTS.length}
             <span aria-hidden="true">{showAchievements ? ' ▾' : ' ▸'}</span>
           </button>
+          {mainCleared && (
+            <button
+              className={styles.endingEntry}
+              type="button"
+              onClick={goGameComplete}
+              data-testid="ending-entry"
+            >
+              ✦ 进入结局
+            </button>
+          )}
         </div>
 
         {showAchievements && (

@@ -1,4 +1,4 @@
-// 章节解锁规则单元测试（M4 确立，M5a 修订，M5b 复核）
+// 章节解锁规则单元测试（M4 确立，M5a 修订，M5b 复核，M6 收官复核）
 //
 // ⚠️ 本文件锁定的是一条**实测发现的产品缺陷**的回归：
 //    M4 的规则是「第 N 章解锁 ⇔ 第 N-1 章全部通关」逐级相邻。当中间某章
@@ -11,8 +11,8 @@
 //    **自动**变回逐级相邻（⇔ ch4 全通关），无需改动任何代码 —— 本文件的
 //    「M5b 起」小节正是对该自适应的复核。
 //
-// ⚠️ 仍有一个空章节：`ch6`（标签，属 M6）。因此「跳过无卡章节」这条逻辑
-//    在 ch6 上仍然生效（见最后一节），不能因为 ch4 落地了就删掉该能力。
+// ⚠️ M6 起 ch1~ch6 + F 全部有关卡：「跳章」回溯不再被触发（机制保留备用）。
+//    F 的解锁规则为「全部六章主线通关」（M6 裁定），见最后的收官小节。
 
 import { describe, expect, it } from 'vitest'
 import { isChapterCleared, isChapterUnlocked } from '../game/progression'
@@ -32,21 +32,19 @@ function clearRecords(chapter: ChapterId): Record<string, LevelRecord> {
 const EMPTY: Record<string, LevelRecord> = {}
 
 describe('progression —— 前置事实（这些断言是后续用例的前提）', () => {
-  it('ch1~ch5 均有关卡；仅 ch6 / F 尚未实现（关卡数为 0）', () => {
+  it('ch1~ch6 与 F 全部有关卡（M6 收官：全游戏 27 关）', () => {
     expect(getChapterLevels('ch1').length).toBe(4)
     expect(getChapterLevels('ch2').length).toBe(4)
     expect(getChapterLevels('ch3').length).toBe(6)
-    // ⚠️ M5b 起 ch4 已有 5 关（远程章落地）—— 这正是 M5a 那份
-    //    「ch4 关卡数为 0」断言预期会失败的时刻，故此处已按新事实更新。
     expect(getChapterLevels('ch4').length).toBe(5)
     expect(getChapterLevels('ch5').length).toBe(6)
-    // ch6 属 M6（标签），F 属 M6（综合终章）—— 二者仍无关卡
-    expect(getChapterLevels('ch6').length).toBe(0)
-    expect(getChapterLevels('F').length).toBe(0)
+    // ⚠️ M6 起第六章 5 关 + 终章 2 关落地
+    expect(getChapterLevels('ch6').length).toBe(5)
+    expect(getChapterLevels('F').length).toBe(2)
   })
 
-  it('空章节不算「已通关」（否则空章节会放行后续章节）', () => {
-    expect(isChapterCleared('ch6', EMPTY)).toBe(false)
+  it('空章节不算「已通关」（防御回溯逻辑的核心不变量；M6 后暂无空章节但机制保留）', () => {
+    expect(isChapterCleared('ch1', EMPTY)).toBe(false)
     expect(isChapterCleared('F', EMPTY)).toBe(false)
   })
 })
@@ -66,15 +64,18 @@ describe('progression —— 基础规则', () => {
     expect(isChapterUnlocked('ch3', { ...clearRecords('ch1'), ...clearRecords('ch2') })).toBe(true)
   })
 
-  it('综合挑战 F 恒锁（属 M6）', () => {
-    const all = {
+  it('综合挑战 F 需要全部六章通关（M6 裁定，替代早前的「恒锁」）', () => {
+    const throughCh5 = {
       ...clearRecords('ch1'),
       ...clearRecords('ch2'),
       ...clearRecords('ch3'),
       ...clearRecords('ch4'),
       ...clearRecords('ch5'),
     }
-    expect(isChapterUnlocked('F', all)).toBe(false)
+    // 缺 ch6 → 锁
+    expect(isChapterUnlocked('F', throughCh5)).toBe(false)
+    // 六章全通关 → 解锁
+    expect(isChapterUnlocked('F', { ...throughCh5, ...clearRecords('ch6') })).toBe(true)
   })
 })
 
@@ -123,8 +124,8 @@ describe('progression —— M5b 复核：ch4 落地后解锁规则自动回到�
   })
 })
 
-describe('progression —— 跳过尚未实现的章节（该能力对 ch6 仍然生效）', () => {
-  it('ch6 无关卡，其解锁回溯到最近的有卡章节 ch5', () => {
+describe('progression —— M6 收官：ch6 落地后逐级相邻自动闭合', () => {
+  it('ch6 现在需要 ch5 全通关（此前它跳过 ch5 直取 ch4，M6 起不再如此）', () => {
     const throughCh4 = {
       ...clearRecords('ch1'),
       ...clearRecords('ch2'),
@@ -134,20 +135,21 @@ describe('progression —— 跳过尚未实现的章节（该能力对 ch6 仍�
     // ch5 未通关 → ch6 锁定（逐级推进的教学意图保持）
     expect(isChapterUnlocked('ch6', throughCh4)).toBe(false)
 
-    // ch5 全通关 → ch6 解锁（ch6 自身无关卡，但解锁状态可被判出）
+    // ch5 全通关 → ch6 解锁
     expect(isChapterUnlocked('ch6', { ...throughCh4, ...clearRecords('ch5') })).toBe(true)
   })
 
-  it('ch6 不会因为「自己没有关卡」而被判为已通关', () => {
-    // 守护「回溯」逻辑的核心不变量：空章节永不计入已通关，
-    // 否则它会凭空放行后续章节。
-    const all = {
+  it('F 在全部六章通关后解锁（收官前置，见基础规则一节的 M6 裁定）', () => {
+    const throughCh6 = {
       ...clearRecords('ch1'),
       ...clearRecords('ch2'),
       ...clearRecords('ch3'),
       ...clearRecords('ch4'),
       ...clearRecords('ch5'),
+      ...clearRecords('ch6'),
     }
-    expect(isChapterCleared('ch6', all)).toBe(false)
+    expect(isChapterUnlocked('F', throughCh6)).toBe(true)
+    // F 自身未通关不影响「已解锁」—— 解锁与通关是两件事
+    expect(isChapterCleared('F', throughCh6)).toBe(false)
   })
 })

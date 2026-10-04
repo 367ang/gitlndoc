@@ -11,8 +11,9 @@
  * ⚠️ M1 只实现 `init` / `add` / `commit` / `status` / `log`。
  * M4 扩展：branch / checkout / merge / rebase / rm（真删）/ diff / logAll，
  * 以及 commit 的 MERGE_HEAD 双亲机制 —— 见各函数处注释。
- * tag / remote / clone / push / fetch / pull 属 M5/M6，此处仍缺席；
- * 语法层命中这些子命令时回 `GitUnsupportedError`，而不是伪造执行。
+ * M5a 扩展：reset / restore / revert / reflog + HEAD@{n}；M5b 扩展：remote / clone / push / fetch / pull。
+ * M6 扩展：tag（createTag / listTags / deleteTag / resolveTagTarget —— 第六章「历史锚点」）；
+ * 语法层命中未落地子命令（stash 等）时回 `GitUnsupportedError`，而不是伪造执行。
  */
 
 import git from 'isomorphic-git';
@@ -1976,12 +1977,275 @@ export async function isDescendent(
   );
 }
 
+// ── M6：标签（第六章「历史锚点」）────────────────────────────────────────────
+//
+// ⚠️ 探针实测结论（docs/milestones/M6-tasks.md「实测环境事实」）：
+//   - **轻量标签** = `git.tag({ ref, object })` —— 只写 `refs/tags/<名>` 指向提交；
+//     ⚠️ 它**忽略 message**：传了 message 也只是轻量标签（探针 P2 实测，
+//     isomorphic-git 1.27 的 `tag()` 内部根本不接收 message 参数）。
+//   - **注解标签** = `git.annotatedTag({ ref, object, message, tagger })` ——
+//     产出真 tag 对象（`readTag` 可读），tagger 身份必须显式给（缺省走 config）。
+//   - 重复创建（无 force）抛 `AlreadyExistsError`，与真 git 一致。
+//   - `log({ ref: <tag名> })` 会自动 peel 注解 tag 对象 —— 按标签取提交历史可直接用。
+//   - 推送：`git.push({ ref: '<tag名>' })` 经 `refpaths` 展开为 `refs/tags/<名>`，
+//     远程 ref 缺省即同名 —— 走既有 fileRemote 服务端全链路可行（真协议探针验证）。
+
+/** 标签列表中的一项 */
+export interface TagEntry {
+  /** 标签名（不含 refs/tags/ 前缀） */
+  name: string;
+  /** 该标签指向的提交短 hash（注解标签为其目标提交，即 peel 后的值） */
+  shortHash: string;
+  /** 是否为注解标签（轻量为 false） */
+  annotated: boolean;
+  /** 注解标签的信息（轻量无 —— undefined 与「注解但信息为空」可区分） */
+  message?: string;
+}
+
+/** `createTag()` 的返回值 */
+export interface TagResult {
+  /** 标签名 */
+  name: string;
+  /** 指向的提交短 hash（注解标签为目标提交的短 hash，非 tag 对象本身的） */
+  shortHash: string;
+  /** 是否为注解标签 */
+  annotated: boolean;
+}
+
+/**
+ * `git tag <name> [<commit>]` / `git tag -a <name> -m <msg> [<commit>]`。
+ *
+ * @param name    标签名
+ * @param options.message 提供时创建**注解标签**（tagger 用固定学习者身份）；
+ *                        缺省为轻量标签 —— 与笔记 `git-tags.md` 的两分法一致。
+ * @param options.target 目标（分支名 / 提交 hash / ref 表达式），缺省当前 HEAD；
+ *                       解析走 `resolveRefInternal`（支持 `HEAD~1` 等写法，与 reset/revert 同源）。
+ */
+export async function createTag(
+  name: string,
+  options: RepoOptions & { message?: string; target?: string } = {},
+): Promise<GitResult<TagResult>> {
+  const base = fsArgs(options);
+  const command = options.message !== undefined
+    ? `git tag -a ${name} -m "${options.message}"`
+    : `git tag ${name}`;
+
+  return runGit(command, async () => {
+    // 先解析目标提交（缺省 HEAD； unborn 仓库没有可打标签的对象，让 resolveRef 报 NotFound）
+    const targetOid = options.target !== undefined
+      ? await resolveRefInternal(base, options, options.target)
+      : await unbornSafeHeadOrThrow(base, command);
+    // ⚠️ git.tag / annotatedTag 的 object 传**提交 oid**：GitRefManager.resolve 对
+    //    任意 ref 都能解析，但传 oid 最直接，也让「轻量 ref 指向哪个提交」一眼可判。
+    if (options.message !== undefined) {
+      await git.annotatedTag({
+        ...base,
+        ref: name,
+        object: targetOid,
+        message: options.message,
+        tagger: { ...LEARNER_IDENTITY },
+      });
+    } else {
+      await git.tag({ ...base, ref: name, object: targetOid });
+    }
+    return { name, shortHash: targetOid.slice(0, 7), annotated: options.message !== undefined };
+  });
+}
+
+/** HEAD 指向的提交 oid；无提交时抛「没有任何提交可打标签」（真 git 的 fatal 同义） */
+async function unbornSafeHeadOrThrow(base: ReturnType<typeof fsArgs>, command: string): Promise<string> {
+  const head = await unbornSafeHead(base);
+  if (head === null) {
+    throw new GitCommandError(
+      'NoCommitError',
+      '仓库里还没有任何提交 —— 标签必须锚定在某次快照上。',
+      'failed to resolve HEAD',
+      { command, hint: '先 git commit 归档一次改动，再为它打标签。' },
+    );
+  }
+  return head;
+}
+
+/**
+ * `git tag`（无参数）—— 列出本地标签（字母序，与真 git 一致）。
+ *
+ * 注解标签额外读一次 tag 对象取信息与目标提交；轻量标签直接取 ref 值。
+ * 目标提交短 hash：注解标签经 `readTag().tag.object`（peel），轻量即 ref 值本身。
+ */
+export async function listTags(options: RepoOptions = {}): Promise<GitResult<TagEntry[]>> {
+  const base = fsArgs(options);
+  return runGit('git tag', async () => {
+    const names = await git.listTags(base);
+    const entries: TagEntry[] = [];
+    for (const name of names) {
+      const refOid = await git.resolveRef({ ...base, ref: `refs/tags/${name}` });
+      try {
+        const tag = await git.readTag({ ...base, oid: refOid });
+        entries.push({
+          name,
+          shortHash: tag.tag.object.slice(0, 7),
+          annotated: true,
+          message: tag.tag.message.trim(),
+        });
+      } catch {
+        // 轻量标签：ref 直指提交，readTag 必然失败（探针 P2 实测其报 ObjectTypeError）
+        entries.push({ name, shortHash: refOid.slice(0, 7), annotated: false });
+      }
+    }
+    return entries;
+  });
+}
+
+/** `deleteTag()` 的返回值 */
+export interface DeletedTag {
+  /** 被删除的标签名 */
+  name: string;
+  /** 删除前该标签指向的提交短 hash（供回显「deleted tag <名> (was <hash>)」） */
+  shortHash: string;
+}
+
+/**
+ * `git tag -d <name>` —— 删除本地标签。
+ *
+ * 真 git 对不存在的标签报 `tag '<名>' not found`，isomorphic-git 的 deleteTag
+ * 对缺失 ref 静默成功（探针 P6 之外的源码行为），故先解析再删，保证报错语义对齐。
+ */
+export async function deleteTag(
+  name: string,
+  options: RepoOptions = {},
+): Promise<GitResult<DeletedTag>> {
+  const base = fsArgs(options);
+  const command = `git tag -d ${name}`;
+  return runGit(command, async () => {
+    const refOid = await git.resolveRef({ ...base, ref: `refs/tags/${name}` }).catch(() => null);
+    if (refOid === null) {
+      throw new GitCommandError(
+        'NotFoundError',
+        `找不到标签「${name}」。`,
+        `tag '${name}' not found`,
+        { command, hint: 'git tag 可列出全部标签。' },
+      );
+    }
+    await git.deleteTag({ ...base, ref: name });
+    return { name, shortHash: refOid.slice(0, 7) };
+  });
+}
+
+/**
+ * 解析一个标签名指向的目标提交 oid（peel 后的提交，供 `git show <tag>` 与 targetState 用）。
+ *
+ * ⚠️ 注解标签的 `refs/tags/<名>` 指向 **tag 对象**而非提交：`readTag().tag.object`
+ * 即其锚定的提交 oid（peel 一层即够 —— 嵌套 tag 不在本游戏范围内）。
+ * 轻量标签的 ref 值本身就是提交 oid。
+ *
+ * @returns `{ oid, annotated }`；标签不存在返回 null（由调用方决定报错文案）
+ */
+export async function resolveTagTarget(
+  name: string,
+  options: RepoOptions = {},
+): Promise<GitResult<{ oid: string; annotated: boolean } | null>> {
+  const base = fsArgs(options);
+  return runGit(`resolveTagTarget ${name}`, async () => {
+    const refOid = await git.resolveRef({ ...base, ref: `refs/tags/${name}` }).catch(() => null);
+    if (refOid === null) return null;
+    try {
+      const tag = await git.readTag({ ...base, oid: refOid });
+      return { oid: tag.tag.object, annotated: true };
+    } catch {
+      return { oid: refOid, annotated: false };
+    }
+  });
+}
+
+/**
+ * `git describe` —— 找出「从当前 HEAD 可达的、最近的标签」并渲染成版本描述（M6）。
+ *
+ * 真实语义：从 HEAD 沿历史向前走，遇到**第一个被标签锚定的提交**即返回
+ * `<tag>`（正好落在标签上）或 `<tag>-<n>-g<hash>`（其后还有 n 个提交）。
+ *
+ * ⚠️ 与真 git 的差异（刻意简化，教学仓库足够）：
+ *   - 真 git 缺省只看**注解标签**，`--tags` 才纳入轻量标签 —— 本函数照搬该规则；
+ *   - 真 git 的遍历按提交图拓扑序 + 标签优先级（annotated > lightweight），
+ *     教学仓库历史是单线或浅分叉，这里按「logAll 的时间倒序」逐个提交查标签命中，
+ *     首个命中即答案 —— 语义在无环简单历史上与真 git 一致；
+ *   - 走到根提交仍未命中：真 git 报 `fatal: No annotated tags can describe ...`。
+ *
+ * @param options.tags true = 轻量标签也纳入（`git describe --tags`）
+ * @returns 渲染好的描述字符串；无可达标签时 value 为 null（由 executor 决定报错文案）
+ */
+export async function describe(
+  options: RepoOptions & { tags?: boolean } = {},
+): Promise<GitResult<string | null>> {
+  const base = fsArgs(options);
+  return runGit('git describe', async () => {
+    // 标签名 → 目标提交 oid（按 options.tags 过滤轻量标签）
+    const tagNames = await git.listTags(base);
+    const tagTarget = new Map<string, string>();
+    for (const name of tagNames) {
+      const refOid = await git.resolveRef({ ...base, ref: `refs/tags/${name}` }).catch(() => null);
+      if (refOid === null) continue;
+      try {
+        const tag = await git.readTag({ ...base, oid: refOid });
+        tagTarget.set(name, tag.tag.object);
+      } catch {
+        // 轻量标签：仅当 --tags 时纳入
+        if (options.tags === true) tagTarget.set(name, refOid);
+      }
+    }
+    if (tagTarget.size === 0) return null;
+
+    // HEAD 的历史（新→旧）； unborn 仓库无从 describe
+    let headOid: string | null;
+    try {
+      headOid = await git.resolveRef({ ...base, ref: 'HEAD' });
+    } catch {
+      return null;
+    }
+
+    // 标签目标提交 → 标签名（一个提交可被多个标签锚定；取字母序第一个，稳定可解释）
+    const tagsByTarget = new Map<string, string>();
+    for (const [name, oid] of [...tagTarget.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+      if (!tagsByTarget.has(oid)) tagsByTarget.set(oid, name);
+    }
+
+    // 从 HEAD 沿第一父链向前走：命中标签目标的提交即「最近的标签」
+    const seen = new Set<string>();
+    // ⚠️ 显式标注 string | null：while 条件里的非空判断会让 TS 把 cursor 收窄为 string，
+    // 随后 `cursor = parent`（parent 可为 null）就报「null 不可赋给 string」。
+    let cursor: string | null = headOid;
+    let distance = 0;
+    while (cursor !== null && !seen.has(cursor)) {
+      seen.add(cursor);
+      const tagName = tagsByTarget.get(cursor);
+      if (tagName !== undefined) {
+        if (distance === 0) return tagName;
+        // `<tag>-<n>-g<短hash>`：n = 其后的提交数，g 前缀是 git 的「git hash」约定
+        return `${tagName}-${distance}-g${cursor.slice(0, 7)}`;
+      }
+      // 沿第一父前进（合并提交只走第一父 —— 真 git 的 describe 默认亦然）。
+      // ⚠️ next 显式标注类型：`.catch(() => null)` 与循环内 cursor 的收窄相互引用时
+      //    TS 会报 TS7022（隐式 any 循环），显式类型打断该循环。
+      let next: Awaited<ReturnType<typeof git.readCommit>> | null = null;
+      try {
+        next = await git.readCommit({ ...base, oid: cursor });
+      } catch {
+        return null;
+      }
+      const parent: string | null = next.commit.parent.length > 0 ? next.commit.parent[0] : null;
+      cursor = parent;
+      distance += 1;
+    }
+    return null;
+  });
+}
+
 /**
  * 语法层白名单之外的子命令统一出口。
  *
  * 这是 §14「超出范围给『该版本不支持』提示，而非假装执行」的落点：
- * reset / revert / stash / tag / remote / clone / push / fetch / pull 等
- * M5/M6 子命令都应命中此函数，返回 `GitUnsupportedError`。
+ * stash 等未落地子命令应命中此函数，返回 `GitUnsupportedError`。
+ * （M5b 前此函数还覆盖 remote / clone / push / fetch / pull / tag，
+ * 随各里程碑落地已逐一移出 —— 现仅剩 stash 等。）
  */
 export function unsupported(subcommand: string): GitResult<never> {
   return { ok: false, error: new GitUnsupportedError(subcommand) };
@@ -2155,12 +2419,18 @@ export async function fetch(
 }
 
 /**
- * `git push <remote> [<ref>]` —— 把本地提交推送上去。
+ * `git push <remote> [<ref>]` —— 把本地提交或标签推送上去。
  *
  * ⚠️ 非快进的拒绝**由服务端发出**（`fileRemote.decidePush`）：真 git 的
  * `receive.denyNonFastForwards` 语义。实测 isomorphic-git 的客户端也会先做一次
  * 检测并抛 `PushRejectedError`（`data.reason: 'not-fast-forward'`）——
  * 两条路径都保留，与真 git 的分工一致（客户端查「远程领先」，服务端查「陈旧 oldOid」）。
+ *
+ * ⚠️ M6 起支持推送**标签**：`ref` 传 `refs/tags/<名>` 时，isomorphic-git 的
+ * `GitRefManager.expand`（经 `refpaths`：原名 → refs/ → refs/tags/ → refs/heads/）
+ * 会把它解析到本地标签；远程 ref 缺省与本地同名（`_push` 的 `fullRemoteRef = fullRef`），
+ * 即推成 `refs/tags/<名>` —— 真协议探针已验证 tag 对象完整落裸仓。
+ * 注解标签的对象（tag object）由 `listCommitsAndTags` 一并打包，无需额外处理。
  */
 export async function push(
   remote: string,
@@ -2176,6 +2446,43 @@ export async function push(
       remote,
       url: ALLOWED_REMOTE_URL,
       ...(options.ref ? { ref: options.ref } : {}),
+    });
+  });
+}
+
+/**
+ * 推送一个标签到远程（`git push origin <tag名>`，M6 服务 6-4「推送锚点」）。
+ *
+ * ⚠️ 与 `push({ ref })` 的差别：本函数做**标签语义校验**（本地确有该标签），
+ * 并按真 git 的行为把 ref 规范为 `refs/tags/<名>`。远程端是新建 ref（oldOid 全零）
+ * 或完全相同的重推 —— 后者由 isomorphic-git 客户端报 `PushRejectedError('tag-exists')`
+ * （已存在于远程且未带 force），与真 git 的 `! [rejected] ... (already exists)` 同义。
+ */
+export async function pushTag(
+  remote: string,
+  name: string,
+  options: RepoOptions = {},
+): Promise<GitResult<void>> {
+  const base = fsArgs(options);
+  const command = `git push ${remote} ${name}`;
+  return runGit(command, async () => {
+    // 本地必须有该标签 —— 缺失时 isomorphic-git 的 expand 会抛 NotFoundError，
+    // 但报错文案不友好（`expand: ref not found`），先查一次给出教学向提示。
+    const exists = await git.resolveRef({ ...base, ref: `refs/tags/${name}` }).catch(() => null);
+    if (exists === null) {
+      throw new GitCommandError(
+        'NotFoundError',
+        `本地找不到标签「${name}」，无法推送。`,
+        `src refspec ${name} does not match any`,
+        { command, hint: 'git tag 先创建标签，再推送。' },
+      );
+    }
+    await git.push({
+      ...base,
+      http: createRemoteHttpClient(SANDBOX_REMOTE_PATH),
+      remote,
+      url: ALLOWED_REMOTE_URL,
+      ref: `refs/tags/${name}`,
     });
   });
 }

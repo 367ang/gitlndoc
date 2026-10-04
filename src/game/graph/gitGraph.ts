@@ -19,7 +19,7 @@
  * 泳道标注：分支头（listBranches 的每个名字）落在其指向提交的泳道上。
  */
 
-import { listBranches, logAll, type CommitEntry, type RepoOptions } from '../../engine/gitApi';
+import { listBranches, listTags, logAll, type CommitEntry, type RepoOptions } from '../../engine/gitApi';
 
 /** 图上的一个提交节点 */
 export interface GraphNode {
@@ -43,12 +43,22 @@ export interface GraphLane {
   label: string;
 }
 
+/** 锚定在某个提交上的标签（M6：提交图上的标签徽标数据） */
+export interface GraphTag {
+  /** 标签名 */
+  name: string;
+  /** 是否为注解标签（徽标样式区分：注解实底、轻量描边） */
+  annotated: boolean;
+}
+
 /** 泳道图的完整布局 */
 export interface GraphLayout {
   /** 提交节点（新→旧） */
   nodes: GraphNode[];
   /** 泳道标注（按 index 升序） */
   lanes: GraphLane[];
+  /** 提交 hash → 锚定在该提交上的全部标签（M6；未锚定标签的提交不出现在表内） */
+  tagsByHash: ReadonlyMap<string, readonly GraphTag[]>;
 }
 
 /**
@@ -56,10 +66,12 @@ export interface GraphLayout {
  *
  * @param commits 全分支提交（新→旧，`gitApi.logAll()` 的输出）
  * @param branchHeads 分支头：`{ name, hash }`（`gitApi.listBranches()` + resolveRef 的结果）
+ * @param tags 标签清单（M6，`gitApi.listTags()` 的输出；缺省视为无标签 —— 向后兼容旧调用）
  */
 export function buildGraphLayout(
   commits: readonly CommitEntry[],
   branchHeads: readonly { name: string; hash: string }[],
+  tags: readonly { name: string; shortHash: string; annotated: boolean }[] = [],
 ): GraphLayout {
   /** hash → 泳道 */
   const laneOf = new Map<string, number>();
@@ -118,7 +130,18 @@ export function buildGraphLayout(
     }
   }
 
-  return { nodes, lanes };
+  // 标签锚点（M6）：标签清单里的 shortHash 反查完整 hash —— 与 readGraph 里分支头的
+  // 反查口径一致（listTags 只给短 hash，教学仓库很小，遍历无压力）。
+  const tagsByHash = new Map<string, GraphTag[]>();
+  for (const tag of tags) {
+    const commit = commits.find((entry) => entry.shortHash === tag.shortHash);
+    if (commit === undefined) continue; // 指向图外提交的标签（理论上不该出现）：跳过不渲染
+    const list = tagsByHash.get(commit.hash) ?? [];
+    list.push({ name: tag.name, annotated: tag.annotated });
+    tagsByHash.set(commit.hash, list);
+  }
+
+  return { nodes, lanes, tagsByHash };
 }
 
 /** `readGraph()` 的返回值：布局 + 采集是否成功 */
@@ -129,11 +152,15 @@ export type GraphResult =
 /**
  * 读取仓库并计算泳道布局（UI 的唯一入口；测试可注入 dir）。
  * 仓库不可读（如未 init）时返回失败 —— UI 据此渲染空态而非白屏。
+ *
+ * M6：同时采集标签清单，锚定到提交上供徽标渲染。
+ * listTags 失败不阻断整图（标签只是装饰性标注）—— 按无标签处理。
  */
 export async function readGraph(options: RepoOptions = {}): Promise<GraphResult> {
-  const [logResult, branchResult] = await Promise.all([
+  const [logResult, branchResult, tagResult] = await Promise.all([
     logAll(options),
     listBranches(options),
+    listTags(options).catch(() => ({ ok: false as const, error: null as never })),
   ]);
   if (!logResult.ok) return { ok: false, error: logResult.error.toString() };
   if (!branchResult.ok) return { ok: false, error: branchResult.error.toString() };
@@ -144,5 +171,6 @@ export async function readGraph(options: RepoOptions = {}): Promise<GraphResult>
     return { name: entry.name, hash: head?.hash ?? entry.shortHash };
   });
 
-  return { ok: true, layout: buildGraphLayout(logResult.value, branchHeads) };
+  const tags = tagResult.ok ? tagResult.value : [];
+  return { ok: true, layout: buildGraphLayout(logResult.value, branchHeads, tags) };
 }

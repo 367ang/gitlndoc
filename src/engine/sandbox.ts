@@ -14,9 +14,8 @@
  * 而 `fs` 层（LightningFS）本身会抛的原生错误，统一经 `runGit()` 归一后再返回。
  *
  * ⚠️ M1 只落地 `LevelInit` 的 `files` 与 `commits` 两个字段。
- * `branches` / `tags` / `remotes` / `template: 'cloneSource'` 属 M4/M5
- * （`gitApi` 在 M1 刻意没有 branch/tag/remote/clone 方法），本层**不伪造实现**，
- * 详见 `rebuild()` 内的注释与 `reset()` 的 fail-fast 校验。
+ * `branches`（M4）/ `remotes` 与 `template: 'cloneSource'`（M5b）/ `tags`（M6）陆续落地；
+ * 本层**不伪造实现**，未落地字段见 `rebuild()` 内的注释与 `reset()` 的 fail-fast 校验。
  */
 
 import type { LevelInit } from '../game/types';
@@ -27,17 +26,19 @@ import { DEFAULT_BRANCH } from './gitApi';
 import { resetRemoteRepo, seedRemoteBranches } from './fileRemote';
 import { clearReflog } from './reflog';
 
-/** M1 已落地的 `LevelInit` 字段——只有这两个，其余字段见 `unsupportedInitError()` */
+/** M1 已落地的 `LevelInit` 字段——后续字段随里程碑陆续落地（见 `reset()` 的 fail-fast 校验） */
 export type SupportedInitField = 'files' | 'commits';
 
+/**
 /**
  * M6 才会落地的 `LevelInit` 字段。
  * 列出它们是为了在 fail-fast 报错里给出准确提示，而非默默吞掉。
  *
- * ⚠️ M4 起 `branches` 已落地、**M5b 起 `remotes` 与 `template:'cloneSource'` 已落地**，
- * 三者均已自本名单移除 —— 现仅剩 `tags`（第六章，属 M6）。
+ * ⚠️ M4 起 `branches` 已落地、M5b 起 `remotes` 与 `template:'cloneSource'` 已落地、
+ * **M6 起 `tags` 已落地**（第六章「历史锚点」）—— 本名单现已清空。
+ * 保留类型与机制本身：未来再出现 deferred 字段时直接复用（与 `DeferredInitField` 同款）。
  */
-export type DeferredInitField = 'tags';
+export type DeferredInitField = never;
 
 /**
  * `reset()` 成功的返回值。
@@ -74,12 +75,13 @@ export interface SandboxState {
  * 注意这里刻意**不接受** `template: 'blank' | 'emptyRepo'`：这两者与 M1 的默认行为
  * （清空后 init 一个空仓库）语义一致，属已支持范围，不算 deferred。
  *
- * ⚠️ M5b 起 `remotes` 与 `template:'cloneSource'` 已落地（第四章「星际连接」），
- * 故自此名单移除 —— 现仅剩 `tags`（第六章，属 M6）。
+ * ⚠️ M5b 起 `remotes` 与 `template:'cloneSource'` 已落地（第四章「星际连接」）、
+ * M6 起 `tags` 已落地（第六章「历史锚点」）—— deferred 名单已清空。
+ * `deferredFieldsOf` 保留为空实现：机制本身（fail-fast 而非静默忽略）仍是未来字段的样板。
  */
 function deferredFieldsOf(init: LevelInit): DeferredInitField[] {
   const deferred: DeferredInitField[] = [];
-  if (init.tags?.length) deferred.push('tags');
+  void init;
   return deferred;
 }
 
@@ -230,11 +232,54 @@ export async function reset(init: LevelInit = {}): Promise<GitResult<SandboxStat
       if (!created.ok) throw created.error;
     }
 
-    // 7) 收尾前回到 main：关卡一律从 main 开始（`LevelInit.branches` 只要求「分支存在」）。
-    //    `InitCommit.on` 留下的检出游标也一并归位。
+    // 6.5) 预置标签（M6，第六章「历史锚点」）：
+    //      `tags[].at` 是**预置提交的信息**（与 remotes.branches[].at 同一款「语义坐标」，
+    //      见 fileRemote.seedRemoteBranches 的注释）—— 在预置历史里定位到对应提交后打标签。
+    //      注解标签的 message 取 `msg ?? name`（缺省与 git.tag 的 message=ref 行为一致）。
+    //      ⚠️ 必须在预置提交之后执行；标签不随「回 main」移动，放哪一步都可以，
+    //         与分支预置放同一段是为可读性。
+    //      ⚠️ `at` 找不到时 fail-fast：与 seedRemote 的同款裁定 —— 静默跳过会让关卡
+    //         开局少一个标签，玩家对着「给 v1.0 打注解」的目标无从下手且无报错线索。
+    if ((init.tags ?? []).length > 0) {
+      const allCommits = await gitApi.logAll({ dir: REPO_DIR });
+      if (!allCommits.ok) throw allCommits.error;
+
+      const oidByMessage = new Map<string, string>();
+      for (const commit of allCommits.value) {
+        // 与 seedRemote 同款裁定：同名提交取最早的一个（稳定且可解释）
+        const key = commit.message.trim();
+        if (!oidByMessage.has(key)) oidByMessage.set(key, commit.hash);
+      }
+
+      for (const tag of init.tags ?? []) {
+        const oid = oidByMessage.get(tag.at.trim());
+        if (oid === undefined) {
+          throw new GitCommandError(
+            'NotFoundError',
+            `关卡数据错误：标签「${tag.name}」引用的提交「${tag.at}」不存在于本关的预置提交中。`,
+            `sandbox seedTags: commit "${tag.at}" not found`,
+            { command: 'sandbox reset', hint: '请核对关卡 init.commits 里的 message。' },
+          );
+        }
+        const created = await gitApi.createTag(tag.name, {
+          dir: REPO_DIR,
+          ...(tag.message !== undefined ? { message: tag.message } : {}),
+          target: oid,
+        });
+        if (!created.ok) throw created.error;
+      }
+    }
+
+    // 7) 收尾检出位置：默认回 main（`LevelInit.branches` 只要求「分支存在」；
+    //    `InitCommit.on` 留下的检出游标也一并归位）。
+    //    ⚠️ 例外（M6，F-1「崩坏时间线」）：`stayOnBranch` 显式声明「开局停在某个
+    //    非主线分支」——「风暴把你困在修复分支」的叙事需要开局即在 feature，
+    //    且这让 `headBranch main` 类目标开局不成立。**不猜**：既有关卡
+    //    （ch3/ch4）即便最后一条预置带 on，也一律回 main（其测试锁定该行为）。
     if ((init.commits ?? []).some((c) => c.on) || (init.branches ?? []).length > 0) {
-      const mainCheck = await gitApi.checkout(DEFAULT_BRANCH, { dir: REPO_DIR });
-      if (!mainCheck.ok) throw mainCheck.error;
+      const checkoutTarget = init.stayOnBranch ?? DEFAULT_BRANCH;
+      const checkout = await gitApi.checkout(checkoutTarget, { dir: REPO_DIR });
+      if (!checkout.ok) throw checkout.error;
     }
 
     // 7.5) 远程宇宙（M5b，第四章「星际连接」）。

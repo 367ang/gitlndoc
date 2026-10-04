@@ -48,7 +48,17 @@ export interface LevelInit {
   files?: Record<string, string> // 预置文件路径 → 内容（首次写入）
   commits?: InitCommit[] // 预置提交（author/date/msg/message）
   branches?: { name: string; from: string }[] // 预置分支
-  tags?: { name: string; at: string }[]
+  /**
+   * 预置标签（M6，第六章「历史锚点」）。
+   *
+   * - `name`：标签名（如 `v1.0.0`），打在 `at` 指向的预置提交上；
+   * - `at`：**该标签指向的预置提交信息**（`InitCommit.msg` 的逐字值）——
+   *   与 `remotes[].branches[].at` 同一款「语义坐标」：用可读的提交信息而非序号，
+   *   作者调整预置提交顺序时不会静默错位；找不到时 fail-fast（schema + sandbox 双防线）；
+   * - `message`：提供即创建**注解标签**（tagger 为固定学习者身份）；
+   *   缺省为轻量标签 —— 与笔记 `git-tags.md` 的两分法一致。
+   */
+  tags?: { name: string; at: string; message?: string }[]
   /**
    * 预置**远程宇宙**（M5b，服务第四章「星际连接」）。
    *
@@ -125,6 +135,16 @@ export interface LevelInit {
    * ```
    */
   dirty?: Record<string, string | null>
+  /**
+   * 收尾检出位置（M6，F-1「崩坏时间线」专用）。
+   *
+   * ⚠️ 默认行为（不提供本字段）：预置完成后**一律回 main** —— 既有关卡
+   * （ch3/ch4 的最后一条预置提交带 `on`）都依赖该行为，其测试锁定。
+   * 本字段让个别关卡显式声明「开局停在某个非主线分支」：
+   * F-1 的叙事是「风暴把你困在修复分支」，且这让 `headBranch main` 类目标
+   * 开局不成立。**不猜** —— 谁需要例外谁声明，其余关卡行为不变。
+   */
+  stayOnBranch?: string
 }
 
 /** 计分参数（§7） */

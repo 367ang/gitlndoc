@@ -17,15 +17,15 @@
  * ⚠️ 实现进度：M2 实现第一章用到的 5 种 `TargetCondition`
  * （`file` / `commitCount` / `commitMessage` / `commitExists` / `workdirClean`）；
  * M4 增补第 2–3 章需要的 4 种（`branch` / `headBranch` / `merged` / `logOrder`）；
- * **M5b 增补第 4 章需要的 1 种（`remote`）**。
- * 其余 1 种（`tag`）属 M6，
- * **明确返回「尚未实现」且判定为未达成** —— 绝不静默当作通过（§14 禁止伪造）。
+ * M5b 增补第 4 章需要的 1 种（`remote`）；
+ * **M6 增补第 6 章需要的 1 种（`tag`）—— §4.3 的 11 种至此全部实现**。
  */
 
 import {
   isDescendent,
   listBranches,
   listRemotes,
+  listTags,
   log as gitLog,
   logWithRef,
   resolveRef as gitResolveRef,
@@ -518,14 +518,35 @@ export async function evaluateTarget(
       };
     }
 
-    // --- tag 属 M6，明确报「尚未实现」，不静默通过（§14） ---
-    case 'tag':
+    // --- tag：标签存在性（M6，第六章「历史锚点」）---
+    case 'tag': {
+      const tags = await listTags(options);
+      if (!tags.ok) {
+        return { target, ok: false, implemented: true, detail: STATUS_UNAVAILABLE };
+      }
+      const found = tags.value.find((entry) => entry.name === target.name);
+
+      if (target.exists) {
+        return {
+          target,
+          ok: found !== undefined,
+          implemented: true,
+          detail:
+            found !== undefined
+              ? `标签「${target.name}」已锚定在快照 ${found.shortHash} 上。`
+              : `还没有名为「${target.name}」的标签。`,
+        };
+      }
       return {
         target,
-        ok: false,
-        implemented: false,
-        detail: `目标类型 "${target.type}" 尚未实现（属 M6），本关无法据此判定。`,
+        ok: found === undefined,
+        implemented: true,
+        detail:
+          found === undefined
+            ? `标签「${target.name}」已移除。`
+            : `标签「${target.name}」仍然存在，应当被移除。`,
       };
+    }
 
     default: {
       // 穷尽性检查：新增 TargetCondition 类型时，此处会编译报错，避免判据静默缺失

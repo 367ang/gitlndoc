@@ -5,16 +5,15 @@
  * `progressStore.unlockAchievement` 由调用方（结算流程）决定，本模块只算
  * 「本次结算应解锁哪些成就」。
  *
- * 成就清单（M3 开工前与用户确认的口径：GDD 3 个示例 + 2 个进度类）：
+ * 成就清单（M3 口径 5 个 + M6 增补 1 个）：
  *   1. `no-undo`    零回溯大师   —— 单关 0 撤销类命令（GDD 示例）
  *   2. `first-try`  一次成型     —— 单关首次尝试直接过关（GDD 示例）
  *   3. `no-hint`    无提示通关   —— 单关 0 提示过关（GDD 示例）
  *   4. `first-clear` 初露锋芒    —— 首次通过任意一关（进度类）
  *   5. `perfect-chapter` 完美篇章 —— 一章全部关卡都拿到 ★★★（进度类）
- *
- * ⚠️ 与 GDD 的差异说明：GDD §5.3 的「完美通关：全部关卡 ★★★」是**全游戏**口径，
- * 当前只有第一章 4 关，写成全游戏判定会随章节扩容而含义漂移；按**章节**判定
- * 语义稳定（每章可各得一次），故进度类成就取「单章完美」。
+ *   6. `perfect-game`   完美通关 —— **全游戏**全部关卡都拿到 ★★★（M6 增补；
+ *      GDD §5.3 的「完美通关：全部关卡 ★★★」。M3 时因章节未齐无法稳定判定，
+ *      M6 终章落地后全游戏关卡集合固定为 27 关，全游戏口径自此可用）
  */
 
 import type { ChapterId } from '../types';
@@ -56,6 +55,11 @@ export const ACHIEVEMENTS: readonly Achievement[] = [
     title: '完美篇章',
     description: '同一章节的全部关卡都拿到三星。',
   },
+  {
+    id: 'perfect-game',
+    title: '完美通关',
+    description: '全游戏（六章与终章）的全部关卡都拿到三星。',
+  },
 ];
 
 /** 按 id 查成就；未注册的 id 返回 null（防御脏数据，不抛异常） */
@@ -79,6 +83,13 @@ export interface AchievementContext {
   chapterStars: Readonly<Record<string, number>>;
   /** 该章的关卡总数（用于「全章三星」的完整性判定） */
   chapterLevelCount: number;
+  /**
+   * 结算后**全游戏**的逐关星级（M6，「完美通关」成就用）。
+   * 未提供时该成就恒不可得 —— 向后兼容旧调用方（测试可直接传本章数据）。
+   */
+  gameStars?: Readonly<Record<string, number>>;
+  /** 全游戏关卡总数（「完美通关」的完整性判定；与 gameStars 成对提供） */
+  gameLevelCount?: number;
 }
 
 /**
@@ -116,6 +127,18 @@ export function evaluateAchievements(
       allStars.length === context.chapterLevelCount &&
       allStars.every((stars) => stars === 3);
     if (perfect) earned.push('perfect-chapter');
+  }
+
+  // 完美通关（M6）：**全游戏**每一关都有记录、且全部为 3 星。
+  // `gameStars` 与 `gameLevelCount` 由调用方（LevelComplete）取全游戏关卡集填充 ——
+  // 全部章节落地后关卡总数固定（27），全游戏口径自此稳定可判。
+  if (!has('perfect-game') && context.cleared) {
+    const allStars = Object.values(context.gameStars ?? {});
+    const perfect =
+      (context.gameLevelCount ?? 0) > 0 &&
+      allStars.length === context.gameLevelCount &&
+      allStars.every((stars) => stars === 3);
+    if (perfect) earned.push('perfect-game');
   }
 
   return earned;

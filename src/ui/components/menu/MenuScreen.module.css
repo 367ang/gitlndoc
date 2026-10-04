@@ -189,6 +189,23 @@
   color: var(--gtp-color-text);
 }
 
+/* 结局入口（M6）：全部主线通关后出现在汇总条末尾，星色辉光标识「收官」 */
+.endingEntry {
+  padding: var(--gtp-space-1) var(--gtp-space-3);
+  background: var(--gtp-color-surface-raised);
+  border: 1px solid var(--gtp-color-star);
+  border-radius: var(--gtp-radius-pill);
+  color: var(--gtp-color-star);
+  font-size: var(--gtp-font-size-xs);
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 0 12px rgb(255 209 102 / 30%);
+}
+
+.endingEntry:hover {
+  color: var(--gtp-color-text);
+}
+
 .achievementList {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));

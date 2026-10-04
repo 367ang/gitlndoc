@@ -33,8 +33,8 @@ const SCORING_KEYS: readonly (keyof ScoringParams)[] = [
 /**
  * §4.3 中**已实现判定逻辑**的 `TargetCondition` 类型。
  *
- * ⚠️ 这是「实现进度」的事实来源：`src/game/validate/targetState.ts` 处理这 10 种，
- * 其余 1 种由 `UNIMPLEMENTED_TARGET_TYPES` 列出并明确报「尚未实现」。
+ * ⚠️ 这是「实现进度」的事实来源：`src/game/validate/targetState.ts` 处理这 11 种，
+ * 其余类型由 `UNIMPLEMENTED_TARGET_TYPES` 列出并明确报「尚未实现」。
  * 两处名单必须同步 —— 由 `levels.test.ts` 断言两份名单互补且与 targetState 一致。
  */
 export const IMPLEMENTED_TARGET_TYPES: readonly TargetCondition['type'][] = [
@@ -50,12 +50,12 @@ export const IMPLEMENTED_TARGET_TYPES: readonly TargetCondition['type'][] = [
   'logOrder',
   // M5b（第 4 章远程关卡）
   'remote',
-] as const;
-
-/** §4.3 中尚未实现判定逻辑的类型（对应章节属 M6） */
-export const UNIMPLEMENTED_TARGET_TYPES: readonly TargetCondition['type'][] = [
+  // M6（第 6 章标签关卡）
   'tag',
 ] as const;
+
+/** §4.3 中尚未实现判定逻辑的类型（当前为空 —— 11 种全部落地） */
+export const UNIMPLEMENTED_TARGET_TYPES: readonly TargetCondition['type'][] = [];
 
 /** 校验结果：成功时收窄为 `Level`，失败时给出**可直接展示给关卡作者**的中文原因 */
 export type ValidationResult =
@@ -180,19 +180,19 @@ function validateHints(hints: unknown, collector: ErrorCollector): void {
 
 /**
  * 校验 `init`：允许 `files` / `commits` / `branches`（M4）、
- * `remotes` 与 `template: 'cloneSource'`（M5b），
+ * `remotes` 与 `template: 'cloneSource'`（M5b）、
+ * `tags`（M6），
  * 以及语义等价的 `template: 'blank' | 'emptyRepo'`。
  *
- * ⚠️ `tags` 会在 `sandbox.reset()` 处 **fail-fast 报错**（刻意不伪造，见
- * docs/milestones/M1-tasks.md「实测环境事实」）。若把关卡写坏了要等到玩家进关才炸，
- * 体验很差 —— 故这里在校验期就拦下，并给出与 sandbox 同一口径的说明。
- * （M5b 起 `remotes` / `cloneSource` 已落地，自 deferred 名单移除。）
+ * ⚠️ M1~M5 期间 `tags` 会在 `sandbox.reset()` 处 **fail-fast 报错**（刻意不伪造）；
+ * M6 起已落地，转为跨字段校验：`tags[].at` 必须是本关 `init.commits` 里
+ * 真实存在的提交信息（与 remotes.branches[].at 同款防线）。
  *
  * 校验细则：
  *   - `branches`：name 非空且不以 `-` 开头；`from` 可选、非空字符串；
  *   - `commits[].on`：可选分支名，同上；`commits[].files`：与 `init.files` 同规则；
- *   - `remotes[].branches[].at`：必须是本关 `init.commits` 里**真实存在**的提交信息 ——
- *     这条跨字段校验能在关卡编写期就抓到「引用了一条不存在的提交」，
+ *   - `remotes[].branches[].at` / `tags[].at`：必须是本关 `init.commits` 里**真实存在**
+ *     的提交信息 —— 这条跨字段校验能在关卡编写期就抓到「引用了一条不存在的提交」，
  *     而不用等玩家进关时 `sandbox.seedRemote` 才 fail-fast。
  */
 function validateInit(init: unknown, collector: ErrorCollector): void {
@@ -215,13 +215,13 @@ function validateInit(init: unknown, collector: ErrorCollector): void {
     );
   }
 
-  // sandbox.reset() 的 fail-fast 名单，此处提前拦截（M5b 起仅剩 tags）
+  // sandbox.reset() 的 fail-fast 名单 —— M6 起 `tags` 已落地，全部字段就位，名单为空。
+  // 机制保留：未来再出现未落地字段时在此提前拦截（与 sandbox.deferredFieldsOf 同步）。
   const deferred: string[] = [];
-  if (Array.isArray(tags) && tags.length > 0) deferred.push('tags');
   if (deferred.length > 0) {
     collector.add(
       'init',
-      `${deferred.join(' / ')} 尚未落地（属 M6），sandbox.reset() 会 fail-fast 拒绝执行。`,
+      `${deferred.join(' / ')} 尚未落地，sandbox.reset() 会 fail-fast 拒绝执行。`,
     );
   }
 
@@ -370,6 +370,41 @@ function validateInit(init: unknown, collector: ErrorCollector): void {
         }
         if (commitFiles !== undefined) {
           validateFileMap(commitFiles, `${path}.files`);
+        }
+      });
+    }
+  }
+
+  // `tags`（M6，第六章「历史锚点」）：结构与跨字段校验。
+  // `at` 指向的提交信息必须真实存在 —— 与 remotes.branches[].at 同款防线：
+  // 关卡编写期抓错，而不是等玩家进关时 sandbox 的 seedTags fail-fast。
+  if (tags !== undefined) {
+    if (!Array.isArray(tags)) {
+      collector.add('init.tags', '必须是数组（可为空）。');
+    } else {
+      const seenTagNames = new Set<string>();
+      tags.forEach((entry: unknown, index) => {
+        const path = `init.tags[${index}]`;
+        if (typeof entry !== 'object' || entry === null) {
+          collector.add(path, '必须是 { name, at, message? } 对象。');
+          return;
+        }
+        const { name, at, message } = entry as { name?: unknown; at?: unknown; message?: unknown };
+        if (typeof name !== 'string' || name.trim().length === 0 || name.startsWith('-')) {
+          collector.add(`${path}.name`, '必须是非空且不以 - 开头的标签名。');
+        } else if (seenTagNames.has(name)) {
+          // 同名标签重复声明会让第二次 createTag 抛 AlreadyExistsError，属作者笔误
+          collector.add(`${path}.name`, `标签名「${name}」重复声明。`);
+        } else {
+          seenTagNames.add(name);
+        }
+        if (typeof at !== 'string' || at.trim().length === 0) {
+          collector.add(`${path}.at`, '必须是非空字符串（预置提交的信息）。');
+        } else if (commitMessages.size > 0 && !commitMessages.has(at.trim())) {
+          collector.add(`${path}.at`, `「${at}」不是本关 init.commits 里的任何提交信息。`);
+        }
+        if (message !== undefined && !isNonEmptyString(message)) {
+          collector.add(`${path}.message`, '若提供，必须是非空字符串（注解标签的信息）。');
         }
       });
     }

@@ -5,7 +5,7 @@
 // 节点颜色按泳道（= 分支）取 token 变量，对齐 §9.2「代表分支的暖橙/青绿」。
 
 import { useEffect, useState } from 'react'
-import { readGraph, type GraphLayout } from '../../../game/graph/gitGraph'
+import { readGraph, type GraphLayout, type GraphTag } from '../../../game/graph/gitGraph'
 import styles from './GitGraph.module.css'
 
 export interface GitGraphProps {
@@ -50,6 +50,7 @@ export function GitGraph({ version }: GitGraphProps) {
 
   const nodes = layout?.nodes ?? []
   const lanes = layout?.lanes ?? []
+  const tagsByHash: ReadonlyMap<string, readonly GraphTag[]> = layout?.tagsByHash ?? new Map()
   // 节点 hash → 行下标（连线端点定位用）
   const rowOf = new Map(nodes.map((node, index) => [node.hash, index]))
   const laneX = (lane: number) => 24 + lane * 28
@@ -113,23 +114,52 @@ export function GitGraph({ version }: GitGraphProps) {
           )}
 
           {/* 节点 */}
-          {nodes.map((node, index) => (
-            <g key={node.hash} transform={`translate(${laneX(node.lane)}, ${24 + index * 36})`}>
-              <circle
-                cx={0}
-                cy={0}
-                r={6}
-                fill={LANE_COLORS[node.lane % LANE_COLORS.length]}
-                className={styles.node}
-              />
-              <text className={styles.hash} x={12} y={4}>
-                {node.shortHash}
-              </text>
-              <text className={styles.message} x={64} y={4}>
-                {node.message}
-              </text>
-            </g>
-          ))}
+          {nodes.map((node, index) => {
+            const nodeTags = tagsByHash.get(node.hash) ?? []
+            return (
+              <g key={node.hash} transform={`translate(${laneX(node.lane)}, ${24 + index * 36})`}>
+                <circle
+                  cx={0}
+                  cy={0}
+                  r={6}
+                  fill={LANE_COLORS[node.lane % LANE_COLORS.length]}
+                  className={styles.node}
+                />
+                <text className={styles.hash} x={12} y={4}>
+                  {node.shortHash}
+                </text>
+                <text className={styles.message} x={64} y={4}>
+                  {node.message}
+                </text>
+                {/* 标签徽标（M6）：排在提交信息右侧，注解实底 / 轻量描边 */}
+                {nodeTags.map((tag, tagIndex) => {
+                  // 徽标横向位置：前一枚的估宽 + 间距（标签名短，按 8px/字符估）
+                  const offset =
+                    64 +
+                    node.message.length * 8 +
+                    12 +
+                    nodeTags.slice(0, tagIndex).reduce((sum, item) => sum + item.name.length * 7 + 18, 0)
+                  return (
+                    <g key={tag.name} transform={`translate(${offset}, -9)`}>
+                      <rect
+                        className={tag.annotated ? styles.tagAnnotated : styles.tagLight}
+                        width={tag.name.length * 7 + 12}
+                        height={16}
+                        rx={8}
+                      />
+                      <text
+                        className={tag.annotated ? styles.tagAnnotatedText : styles.tagLightText}
+                        x={6}
+                        y={11.5}
+                      >
+                        {tag.name}
+                      </text>
+                    </g>
+                  )
+                })}
+              </g>
+            )
+          })}
         </svg>
       )}
     </section>

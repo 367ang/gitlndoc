@@ -24,6 +24,7 @@ import gitBasicOperationsRaw from '../../docs/notes/git-basic-operations.md?raw'
 import gitBranchesRaw from '../../docs/notes/git-branches.md?raw'
 import gitUndoRaw from '../../docs/notes/git-undo.md?raw'
 import gitRemotesRaw from '../../docs/notes/git-remotes.md?raw'
+import gitTagsRaw from '../../docs/notes/git-tags.md?raw'
 import { describe, expect, it } from 'vitest'
 import {
   CHAPTERS,
@@ -38,6 +39,7 @@ import { CHAPTER_2_LEVELS } from '../levels/chapters/ch2'
 import { CHAPTER_3_LEVELS } from '../levels/chapters/ch3'
 import { CHAPTER_4_LEVELS } from '../levels/chapters/ch4'
 import { CHAPTER_5_LEVELS } from '../levels/chapters/ch5'
+import { CHAPTER_6_LEVELS } from '../levels/chapters/ch6'
 import {
   IMPLEMENTED_TARGET_TYPES,
   UNIMPLEMENTED_TARGET_TYPES,
@@ -64,6 +66,7 @@ const NOTES: Record<string, string> = {
   'git-branches': gitBranchesRaw,
   'git-undo': gitUndoRaw,
   'git-remotes': gitRemotesRaw,
+  'git-tags': gitTagsRaw,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -128,6 +131,13 @@ const SLUG_BY_HEADING: Record<string, string> = {
   'fetch-pull': '### fetch vs pull',
   clone: '## Fork 工作流',
   'push-rejected': '### 推送被拒绝',
+  // 规则 B（git-tags，M6 ch6/F）：标题即语义，slug 取英文关键词。
+  // ⚠️ 逐字标题必须与 docs/notes/git-tags.md 完全一致。
+  'lightweight': '### 创建轻量标签',
+  'annotated': '### 创建注释标签（推荐）',
+  'list-show': '### 列出标签',
+  'push-tag': '### 推送到远程',
+  'semver-release': '## 语义化版本',
 }
 
 /** 读一篇笔记的正文；未登记时抛错（比静默返回空串更容易定位） */
@@ -203,12 +213,17 @@ describe('关卡数据 —— 第一章 id 与顺序', () => {
     expect(getLevel('随便')).toBeNull()
 
     expect(getFirstLevelOfChapter('ch1')?.id).toBe('ch1-1')
-    // 尚未落地的章节如实返回空数组 / null，不伪造占位关卡（§14）
-    // —— M5b 起 ch1~ch5 全部已注册，仅 ch6（标签，M6）与 F（综合终章）为空
-    expect(getChapterLevels('ch6')).toEqual([])
-    expect(getFirstLevelOfChapter('ch6')).toBeNull()
-    expect(getChapterLevels('F')).toEqual([])
-    expect(getFirstLevelOfChapter('F')).toBeNull()
+    // ⚠️ M6 起全部章节（ch1~ch6 + F）均已注册 —— 全游戏 27 关可达
+    expect(getChapterLevels('ch6').map((level) => level.id)).toEqual([
+      'ch6-1',
+      'ch6-2',
+      'ch6-3',
+      'ch6-4',
+      'ch6-5',
+    ])
+    expect(getFirstLevelOfChapter('ch6')?.id).toBe('ch6-1')
+    expect(getChapterLevels('F').map((level) => level.id)).toEqual(['F-1', 'F-2'])
+    expect(getFirstLevelOfChapter('F')?.id).toBe('F-1')
 
     expect(getAllLevels().map((level) => level.id)).toEqual([
       'ch1-1',
@@ -236,10 +251,17 @@ describe('关卡数据 —— 第一章 id 与顺序', () => {
       'ch5-4',
       'ch5-5',
       'ch5-6',
+      'ch6-1',
+      'ch6-2',
+      'ch6-3',
+      'ch6-4',
+      'ch6-5',
+      'F-1',
+      'F-2',
     ])
   })
 
-  it('章节元信息：M5b 起 ch1~ch5 全部可玩，综合挑战不参与主线排序', () => {
+  it('章节元信息：M6 起 ch1~ch6 与 F 全部可玩，综合挑战不参与主线排序', () => {
     expect(getChapterMeta('ch1')?.playable).toBe(true)
     expect(getChapterMeta('ch1')?.order).toBe(1)
     expect(getChapterMeta('ch2')?.playable).toBe(true)
@@ -250,10 +272,10 @@ describe('关卡数据 —— 第一章 id 与顺序', () => {
     // M5a 落地第五章（撤销章）
     expect(getChapterMeta('ch5')?.playable).toBe(true)
     expect(getChapterMeta('ch5')?.order).toBe(5)
-    // ch6（标签，M6）与 F（综合终章，M6）尚未落地
-    for (const id of ['ch6', 'F'] as ChapterId[]) {
-      expect(getChapterMeta(id)?.playable).toBe(false)
-    }
+    // M6 落地第六章（标签章）与终章 F
+    expect(getChapterMeta('ch6')?.playable).toBe(true)
+    expect(getChapterMeta('ch6')?.order).toBe(6)
+    expect(getChapterMeta('F')?.playable).toBe(true)
     expect(getChapterMeta('F')?.order).toBeNull()
     expect(getChapterMeta('ch4')?.title.length).toBeGreaterThan(0)
 
@@ -342,17 +364,57 @@ describe('关卡数据 —— schema 校验', () => {
     }
   })
 
-  it('schema 拒绝尚未落地的 init 字段（与 sandbox.reset 的 fail-fast 同一口径）', () => {
-    const good = CHAPTER_1_LEVELS[0]
+  it('schema 校验 init.tags（M6 落地）：结构与 at 引用都把关，此前它被 fail-fast 拒绝', () => {
+    const good = CHAPTER_6_LEVELS[0]
 
-    // M4 起 branches 已落地、M5b 起 remotes / cloneSource 已落地，名单只剩 tags
-    const result = validateLevel({ ...good, init: { tags: [{ name: 'v1', at: 'abc' }] } })
-    expect(result.ok).toBe(false)
+    // ⚠️ M6 起 tags 已落地，合法声明应当通过（此前是「尚未落地」的 fail-fast 断言）
+    const legal = validateLevel({
+      ...good,
+      init: {
+        commits: [{ msg: '基线', message: '基线', files: { 'a.md': 'x\n' } }],
+        tags: [{ name: 'v1', at: '基线' }],
+      },
+    })
+    if (!legal.ok) throw new Error(`合法 tags 被拒绝：\n- ${legal.errors.join('\n- ')}`)
+    expect(legal.ok).toBe(true)
 
-    // 以下三者现在都是合法字段
-    expect(validateLevel({ ...good, init: { branches: [{ name: 'dev', from: 'main' }] } }).ok).toBe(true)
-    expect(validateLevel({ ...good, init: { template: 'cloneSource' } }).ok).toBe(true)
-    expect(validateLevel({ ...good, init: { remotes: [{ name: 'origin', url: 'http://sandbox/remote.git' }] } }).ok).toBe(true)
+    // 结构校验：空标签名 / - 开头
+    expect(
+      validateLevel({ ...good, init: { tags: [{ name: '-v', at: '基线' }] } }).ok,
+    ).toBe(false)
+    // 结构校验：同名标签重复声明
+    expect(
+      validateLevel({
+        ...good,
+        init: {
+          commits: [{ msg: '基线', message: '基线', files: { 'a.md': 'x\n' } }],
+          tags: [
+            { name: 'v1', at: '基线' },
+            { name: 'v1', at: '基线' },
+          ],
+        },
+      }).ok,
+    ).toBe(false)
+    // 跨字段校验：at 指向不存在的提交
+    expect(
+      validateLevel({
+        ...good,
+        init: {
+          commits: [{ msg: '基线', message: '基线', files: { 'a.md': 'x\n' } }],
+          tags: [{ name: 'v1', at: '不存在的提交' }],
+        },
+      }).ok,
+    ).toBe(false)
+    // message 提供时必须非空字符串
+    expect(
+      validateLevel({
+        ...good,
+        init: {
+          commits: [{ msg: '基线', message: '基线', files: { 'a.md': 'x\n' } }],
+          tags: [{ name: 'v1', at: '基线', message: '' }],
+        },
+      }).ok,
+    ).toBe(false)
   })
 
   it('remotes 的 `at` 必须是本关真实存在的预置提交信息（跨字段校验）', () => {
@@ -431,9 +493,9 @@ describe('关卡数据 —— targets 类型范围', () => {
   })
 
   it('IMPLEMENTED_TARGET_TYPES 与 UNIMPLEMENTED_TARGET_TYPES 互补且覆盖全部 11 种', () => {
-    // M5b 起 `remote` 已转正（第 4 章远程关卡），未实现名单只剩 `tag`（M6）
-    expect(IMPLEMENTED_TARGET_TYPES).toHaveLength(10)
-    expect(UNIMPLEMENTED_TARGET_TYPES).toHaveLength(1)
+    // ⚠️ M6 起 `tag` 已转正（第六章标签关卡）—— §4.3 的 11 种全部实现，未实现名单为空
+    expect(IMPLEMENTED_TARGET_TYPES).toHaveLength(11)
+    expect(UNIMPLEMENTED_TARGET_TYPES).toHaveLength(0)
 
     const all = [...IMPLEMENTED_TARGET_TYPES, ...UNIMPLEMENTED_TARGET_TYPES]
     expect(new Set(all).size).toBe(11)
@@ -453,6 +515,7 @@ describe('关卡数据 —— targets 类型范围', () => {
         'logOrder',
         'merged',
         'remote',
+        'tag',
         'workdirClean',
       ].sort(),
     )
@@ -643,6 +706,8 @@ describe('关卡数据 —— relatedKnowledge 反查笔记', () => {
       ['git-undo', headingsOf('git-undo')],
       // M5b：第四章接入 git-remotes 笔记
       ['git-remotes', headingsOf('git-remotes')],
+      // M6：第六章与终章接入 git-tags 笔记
+      ['git-tags', headingsOf('git-tags')],
     ])
 
     for (const [slug, heading] of Object.entries(SLUG_BY_HEADING)) {
@@ -774,8 +839,8 @@ describe('关卡数据 —— 第二、三章 id 与注册', () => {
     expect(getChapterLevels('ch2')).toHaveLength(4)
     expect(getChapterLevels('ch3')).toHaveLength(6)
     expect(getLevel('ch3-4')?.title).toBe('冲突消解')
-    // getAllLevels 覆盖 ch1~ch5 共 25 关（ch6/F 属 M6）
-    expect(getAllLevels()).toHaveLength(25)
+    // M6 起 getAllLevels 覆盖全部章节共 32 关（ch1:4 + ch2:4 + ch3:6 + ch4:5 + ch5:6 + ch6:5 + F:2）
+    expect(getAllLevels()).toHaveLength(32)
   })
 
   it('输入模式：ch2 全部拼接（menu），ch3 全部半拼（half）', () => {
@@ -1677,5 +1742,320 @@ describe('关卡数据 —— 第四章可解性（真实引擎 + 真实远程�
     //    而是快进合并的自然结果（远程并未被写入）。
     //    要证明「没有 push」，看的不是头相同，而是**远程的对象库里没有本地新增的提交**。
     expect((await evaluateTargets(level)).satisfied).toBe(true) // 判据已满足
+  })
+})
+
+// ── M6：第六章与终章 ─────────────────────────────────────────────────────────
+
+describe('关卡数据 —— 第六章 id / 注册 / 输入模式', () => {
+  it('ch6 已注册：章节 playable 且 5 关可达、顺序正确', () => {
+    expect(getChapterMeta('ch6')?.playable).toBe(true)
+    expect(getChapterLevels('ch6')).toHaveLength(5)
+    expect(getChapterLevels('ch6').map((level) => level.id)).toEqual([
+      'ch6-1',
+      'ch6-2',
+      'ch6-3',
+      'ch6-4',
+      'ch6-5',
+    ])
+    expect(getLevel('ch6-4')?.title).toBe('推送锚点')
+  })
+
+  it('ch6 全部为自由输入（free），难度按 GDD：6-1~6-3 ★★★，6-4/6-5 ★★★★', () => {
+    for (const level of CHAPTER_6_LEVELS) {
+      expect(level.inputMode).toBe('free')
+      expect(level.halfSkeleton).toBeUndefined()
+    }
+    expect(CHAPTER_6_LEVELS.map((level) => level.difficulty)).toEqual([3, 3, 3, 4, 4])
+  })
+
+  it('终章 F 已注册：2 关可达（F-1 崩坏时间线 / F-2 完整交付），全部自由输入', () => {
+    expect(getChapterMeta('F')?.playable).toBe(true)
+    expect(getChapterLevels('F').map((level) => level.id)).toEqual(['F-1', 'F-2'])
+    expect(getLevel('F-1')?.title).toBe('崩坏时间线')
+    expect(getLevel('F-2')?.title).toBe('完整交付')
+    for (const level of getChapterLevels('F')) {
+      expect(level.inputMode).toBe('free')
+      expect(level.difficulty).toBe(5)
+    }
+  })
+})
+
+describe('关卡数据 —— 第六章可解性（真实引擎走通）', () => {
+  let caseIndexM6 = 0
+  async function freshSandboxM6(init: Level['init'] = {}): Promise<void> {
+    caseIndexM6 += 1
+    configureFs({ name: `levels-m6-${Date.now()}-${caseIndexM6}`, backend: new MemoryBackend() })
+    const result = await reset(init)
+    if (!result.ok) throw new Error(`沙箱初始化失败：${result.error.toString()}`)
+  }
+
+  /** 编辑器动作：在第 N 条命令执行前写文件（before 为命令索引） */
+  type EditorAction = { before: number; path: string; content: string }
+
+  it('5 关开局不得即达标', async () => {
+    for (const level of CHAPTER_6_LEVELS) {
+      await freshSandboxM6(level.init)
+      const state = await evaluateTargets(level)
+      const done = state.results.filter((result) => result.ok)
+      if (done.length !== 0) {
+        throw new Error(
+          `${level.id} 开局就已有 ${done.length} 项达标：` +
+            done.map((r) => `${r.target.type}（${r.detail}）`).join('、'),
+        )
+      }
+    }
+  })
+
+  it('5 关走参考解法后全部过关', async () => {
+    const plans: Record<string, { commands: string[]; edits: EditorAction[] }> = {
+      // 6-1：两条轻量标签
+      'ch6-1': {
+        commands: ['git tag v0.1', 'git tag v0.2'],
+        edits: [],
+      },
+      // 6-2：一条注解标签
+      'ch6-2': {
+        commands: ['git tag -a v1.0.0 -m "版本 1.0.0 发布"'],
+        edits: [],
+      },
+      // 6-3：先查看（探查不计），再归档第四阶段巡检并命名
+      'ch6-3': {
+        commands: [
+          'git tag',
+          'git show v1.0.0',
+          'git add .',
+          'git commit -m "第四阶段巡检"',
+          'git tag -a v1.1.0 -m "稳定期后的第一次巡检"',
+        ],
+        edits: [],
+      },
+      // 6-4：归档定稿 → 命名 → 单独推送标签
+      'ch6-4': {
+        commands: [
+          'git add .',
+          'git commit -m "版本 1.0.0 定稿"',
+          'git tag -a v1.0.0 -m "版本 1.0.0 发布"',
+          'git push origin v1.0.0',
+        ],
+        edits: [],
+      },
+      // 6-5：归档收尾 → 命名新版本
+      'ch6-5': {
+        commands: [
+          'git add .',
+          'git commit -m "发布收尾"',
+          'git tag -a v1.1.0 -m "新增导出能力"',
+        ],
+        edits: [],
+      },
+    }
+
+    for (const level of CHAPTER_6_LEVELS) {
+      await freshSandboxM6(level.init)
+      const plan = plans[level.id]
+      expect(plan, `${level.id} 缺少参考解法计划`).toBeDefined()
+
+      for (const command of plan.commands) {
+        const result = await execute(command)
+        if (!result.ok) {
+          throw new Error(`${level.id} 执行 ${command} 失败：${result.error ?? ''}`)
+        }
+      }
+
+      const state = await evaluateTargets(level)
+      if (!state.satisfied) {
+        const pending = state.results
+          .filter((r) => !r.ok)
+          .map((r) => `${r.target.type}（${r.detail}）`)
+          .join('、')
+        throw new Error(`${level.id} 走完参考解法仍未过关，未达成：${pending}`)
+      }
+      expect(state.satisfied).toBe(true)
+    }
+  })
+
+  it('6-4 参考解法后：裸仓 refs/tags/v1.0.0 存在且 tag 对象完整（真协议推送的事实断言）', async () => {
+    const level = assertValidLevel(getLevel('ch6-4'))
+    await freshSandboxM6(level.init)
+
+    for (const command of ['git add .', 'git commit -m "版本 1.0.0 定稿"', 'git tag -a v1.0.0 -m "版本 1.0.0 发布"', 'git push origin v1.0.0']) {
+      const result = await execute(command)
+      if (!result.ok) throw new Error(`执行 ${command} 失败：${result.error ?? ''}`)
+    }
+
+    const fs = getFs()
+    const bareArgs = { fs, dir: '/remote.git', gitdir: '/remote.git' }
+    const tags = await git.listTags(bareArgs)
+    expect(tags).toContain('v1.0.0')
+
+    const tagOid = await git.resolveRef({ ...bareArgs, ref: 'refs/tags/v1.0.0' })
+    // 注解标签在裸仓里应是一个 tag 对象（≠ 提交本身），且 tag 名与信息完整
+    const tag = await git.readTag({ ...bareArgs, oid: tagOid })
+    expect(tag.tag.tag).toBe('v1.0.0')
+    expect(tag.tag.message.trim()).toBe('版本 1.0.0 发布')
+    expect(tag.tag.object).toBe(await git.resolveRef({ fs, dir: '/repo', ref: 'refs/heads/main' }))
+  })
+
+  it('6-2 引擎事实回归锁：-a -m 产出的是**真 tag 对象**（isomorphic-git 的 tag() 忽略 message，必须走 annotatedTag）', async () => {
+    const level = assertValidLevel(getLevel('ch6-2'))
+    await freshSandboxM6(level.init)
+
+    const result = await execute('git tag -a v1.0.0 -m "版本 1.0.0 发布"')
+    expect(result.ok).toBe(true)
+
+    const fs = getFs()
+    const refOid = await git.resolveRef({ fs, dir: '/repo', ref: 'refs/tags/v1.0.0' })
+    const headOid = await git.resolveRef({ fs, dir: '/repo', ref: 'refs/heads/main' })
+    // ⚠️ 若 ref 直指提交，说明轻量/注解两分法被破坏（探针 P2 踩过的坑）
+    expect(refOid).not.toBe(headOid)
+    const tag = await git.readTag({ fs, dir: '/repo', oid: refOid })
+    expect(tag.tag.tag).toBe('v1.0.0')
+    expect(tag.tag.object).toBe(headOid)
+    expect(tag.tag.message.trim()).toBe('版本 1.0.0 发布')
+  })
+
+  it('git show 与 git describe 的输出形态正确（查看命令的真实语义）', async () => {
+    const level = assertValidLevel(getLevel('ch6-5'))
+    await freshSandboxM6(level.init)
+
+    // describe：HEAD 在「新增导出能力」上，v1.0.0 在基线上 → v1.0.0-1-g<hash>
+    const before = await execute('git describe')
+    expect(before.ok).toBe(true)
+    expect(before.output[0]).toMatch(/^v1\.0\.0-1-g[0-9a-f]{7}$/)
+
+    await execute('git add .')
+    await execute('git commit -m "发布收尾"')
+    await execute('git tag -a v1.1.0 -m "新增导出能力"')
+
+    // 命名后 describe 干净地返回 v1.1.0
+    const after = await execute('git describe')
+    expect(after.ok).toBe(true)
+    expect(after.output[0]).toBe('v1.1.0')
+
+    // show：注解标签的输出含标签名与注解
+    const shown = await execute('git show v1.1.0')
+    expect(shown.ok).toBe(true)
+    expect(shown.output.join('\n')).toContain('标签 v1.1.0')
+    expect(shown.output.join('\n')).toContain('新增导出能力')
+
+    // show 轻量标签：标注「轻量」
+    await execute('git tag v-light')
+    const shownLight = await execute('git show v-light')
+    expect(shownLight.ok).toBe(true)
+    expect(shownLight.output.join('\n')).toContain('轻量')
+
+    // describe --tags 纳入轻量标签；重复打同一标签被拒绝（与真 git 一致）
+    const dup = await execute('git tag v1.1.0')
+    expect(dup.ok).toBe(false)
+    expect(dup.error).toContain('已存在')
+  })
+
+  it('F-1 走参考解法后过关（冲突裁决 + 合并 + 历史只增）', async () => {
+    const level = assertValidLevel(getLevel('F-1'))
+    await freshSandboxM6(level.init)
+
+    // 开局即在 feature 分支（风暴叙事）
+    const status = await execute('git status')
+    expect(status.output.join('\n')).toContain('位于分支 feature')
+
+    const { fsp } = await import('../engine/fs')
+    const F1_BEACON_CORRUPTED_FREE = '信标坐标\n\n纬度：47.20\n经度：108.60\n\n风暴改错了坐标 —— 恢复它。\n'
+    // 1) 在 feature 上修复信标
+    await fsp.writeFile('/repo/notes/信标坐标.md', F1_BEACON_CORRUPTED_FREE, 'utf8')
+    for (const command of ['git add notes/信标坐标.md', 'git commit -m "修复信标坐标"']) {
+      const result = await execute(command)
+      if (!result.ok) throw new Error(`执行 ${command} 失败：${result.error ?? ''}`)
+    }
+    // 2) 回 main 合并 —— 必然冲突
+    await execute('git checkout main')
+    const merged = await execute('git merge feature')
+    expect(merged.ok).toBe(true)
+    expect(merged.output.join('\n')).toContain('冲突')
+    // 3) 裁决：写最终坐标，完成合并
+    await fsp.writeFile(
+      '/repo/notes/信标坐标.md',
+      '信标坐标\n\n纬度：47.20\n经度：108.60\n\n两边的观测都已合流 —— 这是唯一的权威坐标。\n',
+      'utf8',
+    )
+    for (const command of ['git add notes/信标坐标.md', 'git commit -m "合并 feature 并裁决信标坐标"']) {
+      const result = await execute(command)
+      if (!result.ok) throw new Error(`执行 ${command} 失败：${result.error ?? ''}`)
+    }
+
+    const state = await evaluateTargets(level)
+    if (!state.satisfied) {
+      const pending = state.results
+        .filter((r) => !r.ok)
+        .map((r) => `${r.target.type}（${r.detail}）`)
+        .join('、')
+      throw new Error(`F-1 走完参考解法仍未过关，未达成：${pending}`)
+    }
+    expect(state.satisfied).toBe(true)
+  })
+
+  it('F-2 走参考解法后过关（空仓库起步的完整交付流程）', async () => {
+    const level = assertValidLevel(getLevel('F-2'))
+    await freshSandboxM6(level.init)
+
+    const { fsp } = await import('../engine/fs')
+    // 玩家亲手创建交付清单
+    await fsp.writeFile('/repo/交付清单.md', '时间线管理局 · 交付清单\n\n项目：平行宇宙观测站 · 首个正式版本\n状态：已交付\n', 'utf8')
+    for (const command of ['git add 交付清单.md', 'git commit -m "首版交付"']) {
+      const result = await execute(command)
+      if (!result.ok) throw new Error(`执行 ${command} 失败：${result.error ?? ''}`)
+    }
+    // 第二次归档（收尾记录，内容自拟）
+    await fsp.writeFile('/repo/收尾记录.md', '交付收尾。\n', 'utf8')
+    for (const command of ['git add .', 'git commit -m "交付收尾"', 'git tag -a v1.0.0 -m "首个正式版本"', 'git describe']) {
+      const result = await execute(command)
+      if (!result.ok) throw new Error(`执行 ${command} 失败：${result.error ?? ''}`)
+    }
+    // describe 干净返回 v1.0.0
+    expect((await execute('git describe')).output[0]).toBe('v1.0.0')
+
+    const state = await evaluateTargets(level)
+    if (!state.satisfied) {
+      const pending = state.results
+        .filter((r) => !r.ok)
+        .map((r) => `${r.target.type}（${r.detail}）`)
+        .join('、')
+      throw new Error(`F-2 走完参考解法仍未过关，未达成：${pending}`)
+    }
+    expect(state.satisfied).toBe(true)
+  })
+
+  it('sandbox.reset 能预置 init.tags（seedTags：at 引用 + 注解信息逐字落地）', async () => {
+    const level = assertValidLevel(getLevel('ch6-3'))
+    await freshSandboxM6(level.init)
+
+    const listed = await execute('git tag')
+    expect(listed.ok).toBe(true)
+    expect(listed.output).toEqual(['v0.9.0', 'v0.9.5', 'v1.0.0'])
+
+    // 注解信息逐字落盘
+    const shown = await execute('git show v1.0.0')
+    expect(shown.output.join('\n')).toContain('时间线进入稳定期')
+
+    // at 引用正确：v1.0.0 锚定「第三阶段巡检」
+    const fs = getFs()
+    const refOid = await git.resolveRef({ fs, dir: '/repo', ref: 'refs/tags/v1.0.0' })
+    const tag = await git.readTag({ fs, dir: '/repo', oid: refOid })
+    const { commit } = await git.readCommit({ fs, dir: '/repo', oid: tag.tag.object })
+    expect(commit.message.trim()).toBe('第三阶段巡检')
+  })
+
+  it('sandbox.reset 对 at 指向不存在提交的标签 fail-fast（与 seedRemote 同款防线）', async () => {
+    caseIndexM6 += 1
+    configureFs({ name: `levels-m6-bad-${Date.now()}-${caseIndexM6}`, backend: new MemoryBackend() })
+    const result = await reset({
+      commits: [
+        { author: '练习者', date: '第一天', msg: '基线', message: '基线', files: { 'a.md': 'x\n' } },
+      ],
+      tags: [{ name: 'v1', at: '不存在的提交' }],
+    })
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error.toString()).toContain('不存在于本关的预置提交中')
   })
 })

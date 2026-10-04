@@ -60,3 +60,26 @@
   font-size: 12px;
   fill: var(--text-primary, #e8eaf6);
 }
+
+/* 标签徽标（M6）：注解实底（星色）/ 轻量描边（表面色）—— 形态差异一眼可辨 */
+.tagAnnotated {
+  fill: rgb(255 209 102 / 22%);
+  stroke: #ffd166;
+  stroke-width: 1;
+}
+
+.tagAnnotatedText {
+  font-size: 10px;
+  fill: #ffd166;
+}
+
+.tagLight {
+  fill: rgb(20 26 56 / 60%);
+  stroke: #626d96;
+  stroke-width: 1;
+}
+
+.tagLightText {
+  font-size: 10px;
+  fill: #97a3cf;
+}
