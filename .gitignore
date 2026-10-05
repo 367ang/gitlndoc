@@ -25,3 +25,4 @@ coverage/
 *.tsbuildinfo
 test-results/
 .playwright-browsers/
+.cache/
