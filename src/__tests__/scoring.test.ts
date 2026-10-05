@@ -73,9 +73,9 @@ const MET = { hintsUsed: 0, targetsMet: true, firstAttempt: true };
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('scoring —— 星级判定', () => {
-  it('★：撤销类命令把星级压到 1（分数虽 ≥ 0.8·baseScore）', () => {
+  it('撤销类命令经分数影响落段：1 次 reset 后仍 ≥0.7·base → 2 星（M7 口径）', () => {
     // 100 − 15（undo）= 85；4 条成功命令 > optimalMoves=3 → 无 optimal 奖励。
-    // 85 ≥ 80（0.8 线）→ 若无撤销是 3 星；有撤销 → 1 星
+    // M7 起撤销不再锁星：85 ≥ 0.7·100=70 → 2 星（撤销与星级的耦合只经分数）
     const level = makeLevel({ winScore: 60 });
     const history = [
       entry('git add .'),
@@ -86,32 +86,63 @@ describe('scoring —— 星级判定', () => {
     ];
     const result = evaluateScore(level, history, MET);
     expect(result.score).toBe(85);
+    expect(result.stars).toBe(2);
+  });
+
+  it('多次撤销把分数压进 50–69 段 → 1 星（GDD §5.2 分数主轴）', () => {
+    // 3 次撤销：5 条成功命令 > optimalMoves=3 → 无 optimal 奖励。
+    // 100 − 3×15 = 55 ≥ winScore 50 且 < 0.7·100=70 → 1 星（50–69 段）
+    const level = makeLevel({ winScore: 50 });
+    const history = [
+      entry('git add .'),
+      entry('git commit -m "x"'),
+      entry('git reset --hard HEAD~1', true, true),
+      entry('git reset --hard HEAD~1', true, true),
+      entry('git reset --hard HEAD~1', true, true),
+    ];
+    const result = evaluateScore(level, history, MET);
+    expect(result.score).toBe(55);
     expect(result.stars).toBe(1);
   });
 
-  it('★★：过关且 ≥0.8·baseScore，但有提示 → 2 星', () => {
-    // base 70 + optimal 20 − hint 5 = 85 ≥ 80（0.8·70=56 早已过，看的是 0.8·baseScore=80
-    // —— 不对，基准是 baseScore=70：0.8×70=56，85 ≥ 56 ✓；0.95×70=66.5，85 ≥ 66.5
-    // 但有提示 → 非 3 星 → 2 星
+  it('★★：分数 ≥0.7·baseScore；有提示不锁星（只锁 ★★★）', () => {
+    // base 70 + optimal 20 − 方向提示 5 = 85 ≥ 0.7×70=49 → 2 星
+    // （flawless 需 0 提示 —— hintsUsed=1 → 无 flawless）
     const level = makeLevel({ winScore: 60, scoring: { ...PARAMS, baseScore: 70 } });
     const result = evaluateScore(level, [entry('git add .'), entry('git commit -m "x"')], {
       ...MET,
       hintsUsed: 1,
     });
-    expect(result.score).toBe(85);
-    expect(result.stars).toBe(2);
+    // makeLevel 默认 hints=[] → 分级扣分按 0 计（越界封顶不动）。
+    // 提示数据齐备的关卡才有分级扣分 —— 给足 hints 再验：
+    expect(result.score).toBe(90);
+    const withHints = makeLevel({
+      winScore: 60,
+      scoring: { ...PARAMS, baseScore: 70 },
+      hints: [
+        { text: '方向', unlockAfterFailures: 0 },
+        { text: '命令', unlockAfterFailures: 1 },
+        { text: '答案', unlockAfterFailures: 3 },
+      ],
+    });
+    const hinted = evaluateScore(withHints, [entry('git add .'), entry('git commit -m "x"')], {
+      ...MET,
+      hintsUsed: 1,
+    });
+    expect(hinted.score).toBe(85); // 70+20−5
+    expect(hinted.stars).toBe(2);
   });
 
-  it('★★★：≥0.95·baseScore 且 0 提示 0 撤销 → 3 星', () => {
-    // 100 + 20（最优）+ 25（一次通过）= 145 ≥ 95 → 3 星
+  it('★★★：≥0.9·baseScore 且 0 提示 → 3 星（撤销不锁星，M7 口径）', () => {
+    // 100 + 20（最优）+ 25（一次通过）= 145 ≥ 90 → 3 星
     const level = makeLevel({ winScore: 60 });
     const result = evaluateScore(level, [entry('git add .'), entry('git commit -m "x"')], MET);
     expect(result.stars).toBe(3);
   });
 
   it('得分低于 winScore 时不给星，即使目标已达成', () => {
-    // 100 − 5 redo×10=50 − 4 提示×5=20 → 30 < 60 → 0 星（5 次同信息提交各记 redo）
-    const level = makeLevel({ winScore: 60 });
+    // 100 − 5 redo×10=50 − 提示分级(5+10+20=35) = 15 < 60 → 0 星
+    const level = makeLevel({ winScore: 60, hints: [{ text: 'h', unlockAfterFailures: 0 }, { text: 'h', unlockAfterFailures: 1 }, { text: 'h', unlockAfterFailures: 3 }] });
     const history = [
       entry('git add .'),
       entry('git commit -m "x"'),
@@ -123,7 +154,8 @@ describe('scoring —— 星级判定', () => {
     ];
     const result = evaluateScore(level, history, { ...MET, hintsUsed: 4 });
     expect(result.breakdown.redoPenalty).toBe(50);
-    expect(result.score).toBe(30);
+    expect(result.breakdown.hintPenalty).toBe(35);
+    expect(result.score).toBe(15);
     expect(result.stars).toBe(0);
   });
 });
@@ -172,15 +204,65 @@ describe('scoring —— 扣分项', () => {
     expect(result.score).toBe(105);
   });
 
-  it('每步提示按 hintPenalty 扣分', () => {
-    // 100 + 20（最优）− 3×5 = 105
-    const level = makeLevel();
+  it('提示按 GDD §5.1 分级扣分：方向 −5 / 命令 −10 / 完整答案 −20（M7）', () => {
+    // 3 层提示（方向→命令→答案）：看满 3 层 = 5+10+20 = 35
+    // 100 + 20（最优）− 35 = 85
+    const level = makeLevel({
+      hints: [
+        { text: '方向', unlockAfterFailures: 0 },
+        { text: '命令', unlockAfterFailures: 1 },
+        { text: '答案', unlockAfterFailures: 3 },
+      ],
+    });
     const result = evaluateScore(level, [entry('git add .'), entry('git commit -m "x"')], {
       ...MET,
       hintsUsed: 3,
     });
-    expect(result.breakdown.hintPenalty).toBe(15);
-    expect(result.score).toBe(105);
+    expect(result.breakdown.hintPenalty).toBe(35);
+    expect(result.score).toBe(85);
+  });
+
+  it('分级扣分的递进：只看方向 5 分，看到命令层累计 15 分', () => {
+    const level = makeLevel({
+      hints: [
+        { text: '方向', unlockAfterFailures: 0 },
+        { text: '命令', unlockAfterFailures: 1 },
+        { text: '答案', unlockAfterFailures: 3 },
+      ],
+    });
+    const history = [entry('git add .'), entry('git commit -m "x"')];
+    const l1 = evaluateScore(level, history, { ...MET, hintsUsed: 1 });
+    expect(l1.breakdown.hintPenalty).toBe(5);
+    const l2 = evaluateScore(level, history, { ...MET, hintsUsed: 2 });
+    expect(l2.breakdown.hintPenalty).toBe(15);
+  });
+
+  it('双层提示关卡：首层方向 1×、末层按完整答案 4×（末层判定按层级位置）', () => {
+    // hints 共 2 条时：第 2 层既是「中间层」也是「末层」—— 末层优先（它是完整答案）
+    const level = makeLevel({ hints: [{ text: '方向', unlockAfterFailures: 0 }, { text: '答案', unlockAfterFailures: 1 }] });
+    const result = evaluateScore(level, [entry('git add .'), entry('git commit -m "x"')], {
+      ...MET,
+      hintsUsed: 2,
+    });
+    expect(result.breakdown.hintPenalty).toBe(25); // 5 + 20
+  });
+
+  it('hintsUsed 超出总层数按总层数封顶（防御越界，不炸）', () => {
+    const level = makeLevel({ hints: [{ text: '方向', unlockAfterFailures: 0 }, { text: '命令', unlockAfterFailures: 1 }, { text: '答案', unlockAfterFailures: 3 }] });
+    const result = evaluateScore(level, [entry('git add .'), entry('git commit -m "x"')], {
+      ...MET,
+      hintsUsed: 50,
+    });
+    expect(result.breakdown.hintPenalty).toBe(35);
+  });
+
+  it('无提示数据的关卡（hints 为空）提示扣分为 0', () => {
+    const level = makeLevel({ hints: [] });
+    const result = evaluateScore(level, [entry('git add .'), entry('git commit -m "x"')], {
+      ...MET,
+      hintsUsed: 3,
+    });
+    expect(result.breakdown.hintPenalty).toBe(0);
   });
 });
 
@@ -254,9 +336,15 @@ describe('scoring —— 奖励与边界', () => {
       entry('git commit -m "x"'), // redo −10
       entry('git commit -m "x"'), // redo −10
     ];
-    // 100 − 15 − 3×10 = 55；50 条提示 ×5 = 250 → 压穿 0，由 max(0,·) 兜底
-    const result = evaluateScore(level, history, { ...MET, hintsUsed: 50 });
-    expect(result.score).toBe(0);
+    // 100 − 15 − 3×10 = 55；50 条提示压穿 0（越界封顶为 35 也不够 ——
+    // 由 max(0,·) 兜底；此处 hints 取 makeLevel 默认空数组，扣分为 0，
+    // 55 仍 < winScore 60 → 0 星）—— 用带提示关卡验证压穿 0 的路径：
+    const hinted = makeLevel({ hints: [{ text: 'a', unlockAfterFailures: 0 }, { text: 'b', unlockAfterFailures: 1 }, { text: 'c', unlockAfterFailures: 3 }] });
+    const hintedResult = evaluateScore(hinted, history, { ...MET, hintsUsed: 50 });
+    // 55 − 35 = 20 ≥ 0；再把 redo 拉满压穿：另有 max(0,·) 边界用例兜底
+    expect(hintedResult.score).toBe(20);
+    const result = evaluateScore(level, history, { ...MET, hintsUsed: 0 });
+    expect(result.score).toBe(55);
     expect(result.stars).toBe(0);
   });
 
@@ -270,40 +358,43 @@ describe('scoring —— 奖励与边界', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// starsOf 边界（压线：=0.8 / =0.95 恰好达标）
+// starsOf 边界（压线：=0.7 / =0.9 恰好达标；M7 口径）
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('scoring —— starsOf 边界', () => {
   const MET_STAR = { hintsUsed: 0, targetsMet: true, firstAttempt: true };
 
-  it('过关（total ≥ winScore）但 < 0.8·baseScore → 1 星', () => {
-    // baseScore=100：0.8 线 = 80。total=60~79 且 ≥ winScore（如 winScore=60）→ 1 星
-    expect(starsOf(100, 60, 79, MET_STAR, 0)).toBe(1);
-    expect(starsOf(100, 60, 60, MET_STAR, 0)).toBe(1);
+  it('过关（total ≥ winScore）但 < 0.7·baseScore → 1 星', () => {
+    // baseScore=100：0.7 线 = 70。total=60~69 且 ≥ winScore（如 winScore=60）→ 1 星
+    expect(starsOf(100, 60, 69, MET_STAR)).toBe(1);
+    expect(starsOf(100, 60, 60, MET_STAR)).toBe(1);
   });
 
-  it('total 恰好 = 0.8·baseScore → 2 星（≥ 含等于）', () => {
-    expect(starsOf(100, 60, 80, MET_STAR, 0)).toBe(2);
+  it('total 恰好 = 0.7·baseScore → 2 星（≥ 含等于）', () => {
+    expect(starsOf(100, 60, 70, MET_STAR)).toBe(2);
   });
 
-  it('total 恰好 = 0.95·baseScore 且 0 提示 → 3 星', () => {
-    expect(starsOf(100, 60, 95, MET_STAR, 0)).toBe(3);
+  it('total 恰好 = 0.9·baseScore 且 0 提示 → 3 星', () => {
+    expect(starsOf(100, 60, 90, MET_STAR)).toBe(3);
   });
 
-  it('有提示把 3 星压到 2 星；未到 0.8 线但有提示仍 1 星', () => {
-    expect(starsOf(100, 60, 90, { ...MET_STAR, hintsUsed: 1 }, 0)).toBe(2);
-    expect(starsOf(100, 60, 79, { ...MET_STAR, hintsUsed: 1 }, 0)).toBe(1);
+  it('有提示把 3 星压到 2 星（0 提示锁 ★★★，M7 口径）；未到 0.7 线仍 1 星', () => {
+    expect(starsOf(100, 60, 90, { ...MET_STAR, hintsUsed: 1 })).toBe(2);
+    expect(starsOf(100, 60, 69, { ...MET_STAR, hintsUsed: 1 })).toBe(1);
   });
 
-  it('有撤销时最多 1 星（无论分数多高）', () => {
-    expect(starsOf(100, 60, 145, MET_STAR, 1)).toBe(1);
+  it('撤销不锁星（M7）：分数够高即使有撤销也 3 星，分数落段决定 ★/★★', () => {
+    // 145 ≥ 0.9 线 → 3 星（undoCount 不再参与判定 —— 签名已移除该参数）
+    expect(starsOf(100, 60, 145, MET_STAR)).toBe(3);
+    // 85（1 次 reset 后的典型分）→ 2 星
+    expect(starsOf(100, 60, 85, MET_STAR)).toBe(2);
   });
 
   it('未达标恒 0 星（即使奖励分凑过了 winScore）', () => {
-    expect(starsOf(100, 60, 65, { ...MET_STAR, targetsMet: false }, 0)).toBe(0);
+    expect(starsOf(100, 60, 65, { ...MET_STAR, targetsMet: false })).toBe(0);
   });
 
   it('未过关（total < winScore）恒 0 星', () => {
-    expect(starsOf(100, 60, 59, MET_STAR, 0)).toBe(0);
+    expect(starsOf(100, 60, 59, MET_STAR)).toBe(0);
   });
 });

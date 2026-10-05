@@ -29,6 +29,8 @@ export function MenuScreen() {
   const goGameComplete = useViewStore((state) => state.goGameComplete)
   const levelRecords = useProgressStore((state) => state.levelRecords)
   const achievements = useProgressStore((state) => state.achievements)
+  const settings = useProgressStore((state) => state.settings)
+  const setSettings = useProgressStore((state) => state.setSettings)
   const [error, setError] = useState<string | null>(null)
   const [starting, setStarting] = useState<string | null>(null)
   const [showAchievements, setShowAchievements] = useState(false)
@@ -91,6 +93,17 @@ export function MenuScreen() {
               ✦ 进入结局
             </button>
           )}
+          {/* M7 设置开关（gtp:settings:v1 的 UI 消费方落地，清偿 M5 遗留 5）：
+              关闭后关卡内不渲染 HintsPanel，提示扣分自然为 0 —— 面向想自主解题的玩家。 */}
+          <button
+            className={`${styles.achievementToggle} ${styles.hintsToggle}`}
+            type="button"
+            onClick={() => setSettings({ hintsEnabled: !settings.hintsEnabled })}
+            aria-pressed={settings.hintsEnabled}
+            data-testid="hints-toggle"
+          >
+            提示{settings.hintsEnabled ? '开' : '关'}
+          </button>
         </div>
 
         {showAchievements && (

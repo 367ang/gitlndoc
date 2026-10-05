@@ -1334,7 +1334,7 @@ describe('executor —— M5a 撤销：reflog 与恢复剧本（5-6 的引擎依
     expect(result.error).toContain('HEAD@{9}');
   });
 
-  it('undoable 口径：reset/restore/revert 记 true，reflog 与只读命令记 false（§6.2 / §7.3）', async () => {
+  it('undoable 口径（M7）：reset/checkout -- 记 true，revert/restore/reflog 与只读命令记 false', async () => {
     await execute('git init', { dir });
     await writeRepoFile('/repo/a.txt', 'v1\n');
     await execute('git add .', { dir });
@@ -1349,20 +1349,21 @@ describe('executor —— M5a 撤销：reflog 与恢复剧本（5-6 的引擎依
     const statusEntry = await executeToEntry('git status', { dir });
     expect(statusEntry.undoable).toBe(false);
 
-    // revert 要在「有前身可撤销」的提交上执行；先测它再测 reset，避免把历史退到只剩根提交
+    // revert（M7 摘出）：生成反向提交、历史只增不减，是第五章「已同步」场景的正解
     const revertEntry = await executeToEntry('git revert HEAD', { dir });
     expect(revertEntry.ok).toBe(true);
-    expect(revertEntry.undoable).toBe(true);
+    expect(revertEntry.undoable).toBe(false);
 
-    // 此时历史是 [反向提交, 第二, 第一]，reset 掉最近一次
+    // reset 保留惩罚（回退/改写历史）
     const hardEntry = await executeToEntry('git reset --hard HEAD~1', { dir });
     expect(hardEntry.ok).toBe(true);
     expect(hardEntry.undoable).toBe(true);
 
-    // restore 需要先有可恢复的改动
+    // restore（M7 摘出）：从归档版本精确恢复，是 5-3 的正解
     await writeRepoFile('/repo/a.txt', '改乱了\n');
     const restoreEntry = await executeToEntry('git restore a.txt', { dir });
-    expect(restoreEntry.undoable).toBe(true);
+    expect(restoreEntry.ok).toBe(true);
+    expect(restoreEntry.undoable).toBe(false);
 
     // checkout 的撤销性取决于是否有路径参数：切分支不属撤销
     const branchEntry = await executeToEntry('git branch dev', { dir });
@@ -1370,7 +1371,7 @@ describe('executor —— M5a 撤销：reflog 与恢复剧本（5-6 的引擎依
     const checkoutEntry = await executeToEntry('git checkout dev', { dir });
     expect(checkoutEntry.undoable).toBe(false);
 
-    // 而 `checkout -- <path>`（丢弃改动）属撤销（§6.2 字面清单）
+    // 而 `checkout -- <path>`（丢弃改动）保留惩罚（§6.2 字面清单 + M7 复核保留）
     await execute('git checkout main', { dir });
     await writeRepoFile('/repo/a.txt', '又改乱了\n');
     const checkoutPathsEntry = await executeToEntry('git checkout -- a.txt', { dir });

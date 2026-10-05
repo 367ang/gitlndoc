@@ -274,7 +274,11 @@ const LEVEL_1_4: Level = {
     { type: 'commitExists', message: '第二环' },
     { type: 'workdirClean', value: true },
   ],
-  winScore: 90,
+  // M7 调整：90 → 85。M7 起提示按 GDD §5.1 分级扣分（−5/−10/−20），
+  // 「看满 3 条提示后照完整答案执行」的最坏得分为 base 100 + optimal 20 − 35 = 85，
+  // 原 winScore 90 会让「用满提示」的玩家即使全对也无法过关 —— 与提示系统的
+  // 兜底定位矛盾（§9.1 提示是学习台阶，不是陷阱）。其余 31 关 winScore ≤ 85 无需动。
+  winScore: 85,
   scoring: { ...SCORING_PLACEHOLDER },
   // 参考解法：git add . → commit 第一环 → 改文件 → git add . → commit 第二环（5 步）
   optimalMoves: 5,

@@ -126,7 +126,7 @@ const H = require('./cdp-client.cjs');
   await H.backToMenu();
   const summary = await H.evalJs(`document.querySelector('[data-testid="progress-summary"]')?.textContent ?? ''`);
   // ⚠️ 分母随里程碑增长：M5a=20 → **M5b=25（ch4 注册）**；分子恒为 14（ch1~ch3）。
-  H.check('汇总 14/25（ch1~ch3 全部通关）', summary.includes('通关 14/25'), summary.slice(0, 60));
+  H.check('汇总 14/32（ch1~ch3 全部通关）', summary.includes('通关 14/32'), summary.slice(0, 60));
 
   // ⚠️ **M5b 变更**：ch4 已落地 5 关，解锁规则随之自动回到「逐级相邻」——
   //    ch5 的前一个有卡章节是 ch4，故「ch1~ch3 全通关」**不再**能解锁 ch5。

@@ -29,9 +29,10 @@ pnpm smoke:ch3      # node tools/smoke/run-ch3.cjs
 pnpm smoke:ch5      # node tools/smoke/run-ch5.cjs   ← M5a 新增
 pnpm smoke:ch4      # node tools/smoke/run-ch4.cjs   ← M5b 新增
 pnpm smoke:ch6      # node tools/smoke/run-ch6.cjs   ← M6 新增
+pnpm smoke:final    # node tools/smoke/run-final.cjs ← M7 新增
 ```
 
-四段**互相独立**，必须分别运行（每段自行 `connect()` → `resetStorage()` → `openApp()` → 播种/通关 → 断言）。四段合计 **64/64**（8 + 8 + 15 + 33），ch5 段两轮连跑无 flake。
+七段**互相独立**，必须分别运行（每段自行 `connect()` → `resetStorage()` → `openApp()` → 播种/通关 → 断言）。M7 时合计 **152/152**（8 + 8 + 15 + 33 + 41 + 25 + 22）。
 
 > ⚠️ **M5a 起每段开头必须 `resetStorage()`**：进度已落 localStorage（`gtp:progress:v1`），
 > 上一次冒烟留下的记录会被下一次读到 —— 段3 的「无进度时 ch2 锁定」会因此失败（实测）。
@@ -44,6 +45,7 @@ pnpm smoke:ch6      # node tools/smoke/run-ch6.cjs   ← M6 新增
 | [run-ch3.cjs](run-ch3.cjs) | 15/15 | **段2**：种子 ch1+ch2 全通关 → 半拼骨架预填断言（3-1~3-6 进关即验 `command-preview`）→ branch/checkout/switch → 3-3 ff 合并 → **3-4 冲突消解全链路** → 3-5 rebase + logOrder → 3-6 → GitGraph/BranchPanel 渲染 → 汇总 → **ch5 解锁链路**（M5a 追加） |
 | [run-ch5.cjs](run-ch5.cjs) | **41/41** | **段4（M5a）**：free 模式真实键盘输入 → `commit --amend`（替换而非追加）→ `restore --staged`（保住工作区）→ `restore` 找回误删 → `revert` 反向提交 → **5-6 完整「误 reset --hard → reflog → `HEAD@{1}` 恢复」剧本** → 进度落 localStorage 且 **reload 后仍在**（清偿 M4 遗留 1） |
 | [run-ch6.cjs](run-ch6.cjs) | **25/25** | **段6（M6）**：种子 ch1~ch5 → 菜单解锁态双向断言（ch6 可玩 / 结局入口未出现）→ free 模式五关通关（轻量标签 / 注解标签 / 预置标签查看 + 归档命名 / 版本发布）→ GitGraph 标签徽标 → 全部主线通关后「进入结局」入口出现 → 结局页叙事与统计 |
+| [run-final.cjs](run-final.cjs) | **22/22** | **段7（M7）**：种子 ch1~ch6 全 3 星 → **F-1 真机通关**（编辑器改信标 → checkout main → merge 真冲突 → 编辑器裁决 → 完成合并，结算 ★★★）→ **F-2 真机通关**（编辑器新建交付清单 → 两次归档 → describe 报错 → 注解标签，★★★）→ **perfect-game 成就首次真机触发**（结算页成就卡 + 菜单 6/6）→ 结局页真实链路。⚠️ M7 教训：merge 后要等文件树刷新再 editFile（flake 一次后加 waitFor）；报错类断言用「输出含报错文案」而非 `ok:false`（latestHistory 的 DOM 解析恒回 ok:true） |
 
 共享库 [cdp-client.cjs](cdp-client.cjs) 导出 `connect` / `openApp` / `waitFor` / `evalJs` / `check` / `summarize` / `seedProgress` / `enterLevel` / `waitSettled` / `backToMenu` / `clickFrag` / `runCommand` / `typeSuffix` / `editFile` / `runAdd` / `runCommit` / `runGit` / `installCounter`，以及 M5a 新增的 `runFree` / `latestHistory` / `reload` / `resetStorage`。
 
@@ -110,3 +112,8 @@ pnpm smoke:ch6      # node tools/smoke/run-ch6.cjs   ← M6 新增
 另：M5b 起关卡总数 20 → **25**（ch4 注册），故 `run-ch2.cjs` 的汇总断言改为
 `通关 8/25`、`run-ch3.cjs` 改为 `通关 14/25`；`run-ch3.cjs` 末尾的解锁断言也从
 「ch5 可进入」改为「**ch4 可进入**」（ch4 有卡后，解锁规则自动回到逐级相邻）。
+
+⚠️ **M7 复盘**：M6 注册终章 F 后关卡总数已达 **32**，但上述两处汇总分母**没有同步**（25 → 32），
+复跑段1/段2 时才暴露 —— **「注册新章节后冒烟分母要跟着改」此前没有 checklist 位**，
+现记入此处：动 `levels/chapters/index.ts` 时必须全量 grep `/\d+\/\d+` 类汇总断言。
+M7 已修正为 `通关 8/32` 与 `通关 14/32`。

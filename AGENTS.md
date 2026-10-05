@@ -18,7 +18,19 @@
 
 ## 当前状态
 
-**M1（地基）～ M6（第六章「历史锚点」标签 + 综合终章 F；perfect-game 成就 + intro/结局真实化 + GitGraph 标签徽标）全部完成**，三门禁当前为 **`typecheck` 0 / `test` 399 passed / `build` 194.78 kB gzip**（M6 实测）。全游戏 **32 关可玩**（ch1:4 + ch2:4 + ch3:6 + ch4:5 + ch5:6 + ch6:5 + F:2）。下一阶段为 **M7（打磨、调参、E2E）**。
+**M1（地基）～ M7（打磨、调参、E2E；提示分级扣分 + 星级分数主轴 + undoable 收窄 + 设置开关 + 32 关可达性总回归 + Playwright E2E + 真机终章/perfect-game 验收 + code-split）全部完成**，三门禁当前为 **`typecheck` 0 / `test` 410 passed（12 文件）/ `build` 195.6 kB gzip（3 chunk 无警告）**（M7 实测）。全游戏 **32 关可玩**（ch1:4 + ch2:4 + ch3:6 + ch4:5 + ch5:6 + ch6:5 + F:2）。**全部规划里程碑（M1–M7）已收官，项目为发布候选状态**。
+
+⚠️ **M7 的两条计分口径变更（后续动关卡数据 / 计分层前必读，详见 M7-tasks.md §二）**：
+
+- **`undoable` 名单已收窄**：只有 `reset`（三模式）与 `checkout -- <path>` 记惩罚；
+  `revert` / `restore` 是教学正解（历史只增 / 精确恢复），**不再记 undoable**。
+  新增撤销类命令时按「回退型 vs 修复型」归类，不要照 §6.2 的旧字面清单。
+- **星级走分数主轴**（GDD §5.2）：★ ≥ winScore；★★ ≥ 0.7·baseScore；
+  ★★★ ≥ 0.9·baseScore 且 0 提示。撤销经 undoPenalty 影响落段、**不锁星**。
+  提示扣分按层级分档（方向 1× / 命令 2× / 完整答案 4× hintPenalty，GDD §5.1）。
+- **新增关卡时 `winScore ≤ 85`**（「用满提示照完整答案执行」的最坏得分
+  = base 100 + optimal 20 − 35；若教学剧本含撤销罚分等需另行推导，
+  1-4 与 5-6 是先例）。
 
 各里程碑的**产出、三门禁历史、实测环境事实与遗留移交**见 **`docs/milestones/README.md`**（索引）与 `docs/milestones/M*-tasks.md`（各期详情），本文件不复述。
 
@@ -112,12 +124,14 @@ pnpm build           # tsc -b && vite build（构建包含类型检查）
 pnpm preview         # 预览生产构建产物
 pnpm typecheck       # tsc --noEmit（不产出文件的快速类型检查，提交前运行）
 pnpm test            # Vitest（watch 模式）；CI/单次运行用 `pnpm test:run` 或 `pnpm vitest run <file>`
-pnpm smoke:legacy    # 真实浏览器冒烟（真实 Chrome + CDP）；五段独立运行，见 tools/smoke/README.md
+pnpm e2e             # M7 新增：Playwright 主链路 E2E（自动起 dev server + Chromium；浏览器在工作区 .playwright-browsers/）
+pnpm smoke:legacy    # 真实浏览器冒烟（真实 Chrome + CDP）；七段独立运行，见 tools/smoke/README.md
 pnpm smoke:ch2
 pnpm smoke:ch3
 pnpm smoke:ch5       # M5a 新增（第五章六关 + 持久化/刷新恢复复核）
 pnpm smoke:ch4       # M5b 新增（第四章五关 + 远程协议 + 协作冲突剧本）
 pnpm smoke:ch6       # M6 新增（第六章五关 + GitGraph 标签徽标 + 结局页）
+pnpm smoke:final     # M7 新增（终章 F 两关真机通关 + perfect-game 成就 + 结局页真实链路）
 ```
 
 包管理器：**统一使用 pnpm**（与工程文档 §12 的技术选型一致）。`package.json` 中的 `scripts` 字段供 pnpm 调用，不要改用 npm。
@@ -128,7 +142,7 @@ pnpm smoke:ch6       # M6 新增（第六章五关 + GitGraph 标签徽标 + 结
 > ```
 > 同一原因也会导致 `gh` 不可见（影响推送）。
 
-测试运行器已在 M1 配好：**Vitest + @testing-library/react**（`vite.config.ts` 的 `test` 字段，`environment: 'jsdom'`，`globals: true`），测试置于 `src/__tests__/`。**M6 后共 11 个文件，399 个真实用例（无 todo）**，逐文件计数见 `docs/milestones/M6-tasks.md`「验收 / 三门禁」。
+测试运行器已在 M1 配好：**Vitest + @testing-library/react**（`vite.config.ts` 的 `test` 字段，`environment: 'jsdom'`，`globals: true`），测试置于 `src/__tests__/`。**M7 后共 12 个文件，410 个真实用例（无 todo）**（新增 `allLevelsWalkthrough.test.ts` 全 32 关可达性总回归），逐文件计数见 `docs/milestones/M7-tasks.md`「验收 / 三门禁」。Playwright E2E（`e2e/main-flow.spec.ts` + `playwright.config.ts`）随 M7 引入：`pnpm e2e` 自动起 dev server，浏览器装在工作区 `.playwright-browsers/`（`PLAYWRIGHT_BROWSERS_PATH`，已 gitignore）。
 
 > ⚠️ `src/__tests__/setup.ts` 里的 `import 'fake-indexeddb/auto'` **不可删除**：jsdom 不提供 `navigator.locks`，LightningFS 的 `DefaultBackend` 会因此回落到需要 `indexedDB` 的 `Mutex` 分支，删掉即全部测试报 `ReferenceError: indexedDB is not defined`。机理详见 `docs/milestones/M1-tasks.md` 的「实测环境事实」第 2 条。
 
@@ -137,7 +151,7 @@ pnpm smoke:ch6       # M6 新增（第六章五关 + GitGraph 标签徽标 + 结
 ## 仓库状态与注意事项
 
 - **`.gitignore` 已补齐**（涵盖 `node_modules/`、`dist/`、日志、编辑器与系统文件等）。历史提交 `08361a4`、`d1a259c` 曾声称添加过它，但此前工作树中并不存在；现有文件为本仓库实际的忽略规则来源。
-- **`docs/milestones/` 存放里程碑相关的规划与检查文档**（每期一份，记录任务拆解与执行结果）：`M1-preflight.md`（M1 开工前的环境核查）、`M1-tasks.md`、`M2-tasks.md`、`M3-tasks.md`、`M4-tasks.md`、`M5-tasks.md`、`M6-tasks.md`。
+- **`docs/milestones/` 存放里程碑相关的规划与检查文档**（每期一份，记录任务拆解与执行结果）：`M1-preflight.md`（M1 开工前的环境核查）、`M1-tasks.md`、`M2-tasks.md`、`M3-tasks.md`、`M4-tasks.md`、`M5-tasks.md`、`M6-tasks.md`、`M7-tasks.md`。
   - **文件名不带状态后缀** —— 完成状态由 `docs/milestones/README.md` 的索引表表达，**不要**再用 `-DONE` / `-TODO` 后缀命名（该约定已废弃）。
   - **新里程碑**直接在本目录新建 `<里程碑名>-tasks.md`（如 `M5-tasks.md`），并同步在 `docs/milestones/README.md` 补一行索引。
 - 设计文档（`game-design.md`、`development-refinement.md`）**已提交入库**，且成文于任何 `src/` 代码存在之前。本文件通篇引用的章节编号（§2–§14）目前在这些文档中是稳定的；但若你改动了这些文档，请同步更新此处的交叉引用。

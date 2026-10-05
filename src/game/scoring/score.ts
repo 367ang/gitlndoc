@@ -10,10 +10,30 @@
  *   - §7.1 基础分：全部 targets 满足得 baseScore 满分（部分达成不给基础分 ——
  *     §7.1 的原文是「达标即得」，未定义部分给分；而 §4.1 规定必须全部满足才过关，
  *     本引擎据此只区分「达成 / 未达成」两态，不做线性插值）；
- *   - §7.2 惩罚：撤销类（CommandEntry.undoable）、同目标重复提交（redoPenalty）、
- *     提示（hintPenalty，按「已查看的提示条数」计）；
+ *   - §7.2 惩罚：撤销类（CommandEntry.undoable，口径见 executor —— M7 起只有
+ *     reset / checkout -- 这类**回退型**撤销计入，revert / restore 属精确修复不计）、
+ *     同目标重复提交（redoPenalty）、提示（按**分级档位**扣，见下）；
  *   - §7.3 奖励：最优序列（optimalMoves）、一次通过（flawlessBonus）、只读探查（probeBonus，有上限）；
- *   - §7.4 星级：★ 过关；★★ ≥0.8·winScore 且无撤销；★★★ ≥0.95·winScore 且 0 提示 0 撤销。
+ *   - §7.4 星级：分数主轴分段（M7 起对齐 GDD §5.2 的百分比分段，见 starsOf 注释）。
+ *
+ * ── 提示分级扣分（M7，对齐 GDD §5.1「方向提示 −5 / 命令提示 −10 / 完整答案 −20」）──
+ *
+ * 分档依据**提示的层级位置**：关卡提示恒为「方向 → 命令 → 完整答案」的递进剧本
+ * （§9.1 与 GDD §3.3 同构），首层 = 方向、末层 = 完整答案、中间层 = 命令。
+ * 扣分 = Σ(各已看层级的档位罚分)，倍率相对 `hintPenalty`（各关现值 5）取 1:2:4 ——
+ * 即 hintPenalty=5 时恰好得到 GDD 的 −5/−10/−20，无需改任何关卡数据。
+ *
+ * ⚠️ `hintsUsed` 的计数语义支撑这个换算：HintsPanel 逐层上报、sessionStore 按
+ * 层级单调去重（level ≤ hintCountedLevel 不重复计），而面板展开即全部可见 ——
+ * 故 `hintsUsed` 恒等于「已看到的最高层级」，且 1..N 各层必然都已计过。
+ * 换言之，「看过 2 层」必然 = 方向 + 命令两层，不存在跳层。
+ *
+ * ⚠️ 与「照完整答案执行必能过关」的相容性（M7 复核）：最坏情况 = 玩家看满全部
+ * 提示后照抄 —— 总分 = base + optimal − Σ分级罚分。32 关的 base=100、
+ * optimal=20、提示 ≤3 层 → 最坏 85 分；winScore 除 1-4（90）外全部 ≤85。
+ * 1-4 已由 M7 把 winScore 90 → 85（依据：其完整答案提示含「重复两轮」的
+ * 表述使 optimalMoves=5 的步数语义成立，扣满 35 分后 85 分恰可过关；
+ * 原值 90 与「用满提示仍可过关」矛盾，属 M2 时的数据疏漏）。
  *
  * ⚠️ 第一章命令集只有 init/add/commit：
  *   - `undoable` 恒 false（撤销类命令属 M4/M5，executor 预留了该字段），扣分路径
@@ -146,9 +166,42 @@ function subtotal(params: ScoringParams, breakdown: Omit<ScoreBreakdown, 'total'
 }
 
 /**
+ * 提示的分级档位罚分（M7，GDD §5.1 的三级：方向 −5 / 命令 −10 / 完整答案 −20）。
+ *
+ * 档位由**层级位置**决定（关卡提示恒为方向→命令→答案的递进剧本）：
+ *   - 第 1 层（方向提示）：1×hintPenalty
+ *   - 中间层（命令提示）：2×hintPenalty
+ *   - 末层（完整答案）：4×hintPenalty
+ *
+ * hintPenalty=5 时恰好是 GDD 的 −5/−10/−20。倍率集中在此处，
+ * 便于调参与测试断言同源。
+ */
+function hintPenaltyForLevel(hintLevel: number, totalHints: number, basePenalty: number): number {
+  if (hintLevel <= 1) return basePenalty;
+  if (hintLevel >= totalHints) return basePenalty * 4;
+  return basePenalty * 2;
+}
+
+/** 计算提示扣分：Σ(第 1..hintsUsed 层各层的档位罚分)。hintsUsed ≤ 总层数恒成立
+ * （HintsPanel 只会解锁 level.hints 里存在的层级）。防御性 min 保证越界数据不炸。 */
+function countHintPenalty(
+  hintsUsed: number,
+  totalHints: number,
+  basePenalty: number,
+): number {
+  if (totalHints <= 0 || hintsUsed <= 0) return 0;
+  const seen = Math.min(hintsUsed, totalHints);
+  let penalty = 0;
+  for (let level = 1; level <= seen; level += 1) {
+    penalty += hintPenaltyForLevel(level, totalHints, basePenalty);
+  }
+  return penalty;
+}
+
+/**
  * 评估一关的得分与星级。
  *
- * @param level   关卡定义（读 winScore / scoring / optimalMoves）
+ * @param level   关卡定义（读 winScore / scoring / optimalMoves / hints）
  * @param history 本关命令历史（sessionStore.history，时间正序）
  * @param input   会话侧信息：提示数、目标是否达成、是否首次尝试
  *
@@ -173,7 +226,12 @@ export function evaluateScore(
   const redoCount = countRedundantCommits(history);
   const undoPenalty = undoCount * params.undoPenalty;
   const redoPenalty = redoCount * params.redoPenalty;
-  const hintPenalty = input.hintsUsed * params.hintPenalty;
+  // M7：按「已看层级」的档位罚分累计（不再平扣），见文件头「提示分级扣分」
+  const hintPenalty = countHintPenalty(
+    input.hintsUsed,
+    level.hints.length,
+    params.hintPenalty,
+  );
 
   // --- §7.3 奖励 ---
   // 最优序列：成功命令数 ≤ optimalMoves（§7.3「与参考方案一致或更短」）。
@@ -208,43 +266,46 @@ export function evaluateScore(
   // 得分下限为 0：扣分不把总分压成负数（scoring.test.ts 的边界用例）
   const total = Math.max(0, subtotal(params, partial));
 
-  const stars = starsOf(params.baseScore, level.winScore, total, input, undoCount);
+  const stars = starsOf(params.baseScore, level.winScore, total, input);
   return { breakdown: { ...partial, total }, score: total, stars };
 }
 
 /**
- * 星级判定（§7.4，系数基准按用户裁定的口径订正为 baseScore）。
+ * 星级判定（§7.4；M7 起回归 GDD §5.2 的**分数主轴**分段，用户裁定）。
  *
- * ⚠️ 口径订正（M3 实施时发现并与用户确认，2025-06）：§7.4 字面写的是
- * 「★★：得分 ≥ winScore×0.8」「★★★：得分 ≥ winScore×0.95」，但过关前提是
- * 得分 ≥ winScore，而 0.8·winScore < winScore 恒成立 —— 系数线在过关后必然满足，
- * 公式退化（0 撤销 0 提示即恒 3 星），且与 GDD §5.2 的百分比分段
- * （★★★=90–100 / ★★=70–89 / ★=50–69）对不上。§7.4 末句「winScore 默认 = baseScore」
- * 表明系数本意以**满分基准**为参照。故本实现取：
+ * ⚠️ 口径沿革（M3 → M7）：M3 发现 §7.4 字面公式（★★ ≥0.8·winScore / ★★★
+ * ≥0.95·winScore 且 0 提示 0 撤销）中 0.8·winScore < winScore 恒成立、公式退化，
+ * 故取「以 baseScore 为基准的系数 + 0 撤销硬条件」。但该硬条件与第五章的教学
+ * 正路冲突 —— 5-6 的关卡目标**要求**玩家体验 reset --hard 破坏再 reflog 找回
+ * （照剧本玩 2 次 undoable，被锁 1 星）；5-3/5-4/5-5 的参考解法同样含撤销命令。
+ * 「撤销锁星」实质惩罚了关卡让学生做的事，且逼玩家为拿星绕开 revert 伪造提交
+ * （比 revert 更糟的行为反而得高分）—— 与「奖励理解、惩罚试错」（§7 开篇）相悖。
+ *
+ * M7 口径（对齐 GDD §5.2 的百分比分段 ★★★=90–100 / ★★=70–89 / ★=50–69）：
  *   ★  ：targetsMet 且 total ≥ winScore（过关线，仍用 winScore）
- *   ★★ ：total ≥ 0.8·baseScore 且无撤销
- *   ★★★：total ≥ 0.95·baseScore 且 0 提示 0 撤销
- * ch1（baseScore=100）下三档分别为 ≥60 / ≥80 / ≥95，与 GDD 分段一致。
- * 待 M7 平衡调参时若改用别的基准，只需动本函数。
+ *   ★★ ：total ≥ 0.7·baseScore（对齐 GDD 的 70 分段）
+ *   ★★★：total ≥ 0.9·baseScore 且 0 提示（「无提示通关」仍锁三星 ——
+ *         GDD §5.2 的 ★★★ 描述是「零错误、命令数最优、无提示」；
+ *         撤销则通过 undoPenalty 影响落段，不再额外锁星）
  *
- * 单独提出便于单测直接覆盖边界（=0.8 / =0.95 恰好压线的情况）。
+ * 撤销与星级的耦合只经分数：1 次 reset（−15）通常落出 ★★★、仍稳在 ★★，
+ * 与 GDD「★★ = 少量错误」的描述一致。
+ *
+ * 单独提出便于单测直接覆盖边界（=0.7 / =0.9 恰好压线的情况）。
  */
 export function starsOf(
   baseScore: number,
   winScore: number,
   total: number,
   input: ScoringInput,
-  undoCount: number,
 ): Stars {
   // ★：过关线（winScore）——未达标（targetsMet=false）时基础分为 0，
   // 但奖励分（probe 等）仍可能凑过线；星级的前提是「过关」，未达标恒 0 星。
   if (!input.targetsMet) return 0;
   if (total < winScore) return 0;
 
-  if (undoCount > 0) return 1;
-
   const hintsUsed = input.hintsUsed;
-  if (total >= baseScore * 0.95 && hintsUsed === 0) return 3;
-  if (total >= baseScore * 0.8) return 2;
+  if (total >= baseScore * 0.9 && hintsUsed === 0) return 3;
+  if (total >= baseScore * 0.7) return 2;
   return 1;
 }

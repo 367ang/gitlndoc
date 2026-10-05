@@ -489,7 +489,13 @@ const LEVEL_5_6: Level = {
     // 工作区干净（残片已入库）—— 开局不成立
     { type: 'workdirClean', value: true },
   ],
-  winScore: 75,
+  // M7 调整：75 → 65。完整教学剧本（含「误操作 + reflog 恢复」）= 5 条成功命令，
+  // undoable 只剩 2 次 reset（M7 收窄 revert/restore 后）→ undoPenalty −30；
+  // 5 > optimalMoves=2 → 无 optimal；有撤销 → 无 flawless。最坏 100 − 30 = 70 分，
+  // 原 winScore 75 会让照剧本玩的玩家无法过关（M5 遗留 7 的「仍可达 ★★」实为
+  // 笔误 —— 旧口径 undoCount>0 恒 1 星，从未成立）。65 恰使完整剧本落 0.7 线
+  // 上的 ★★（70 分）、最简解（add+commit，145 分）仍 ★★★。
+  winScore: 65,
   scoring: { ...SCORING },
   // 最简解法：add . → commit（2 步）；走完整剧本则需要额外的 reset/reflog/reset
   optimalMoves: 2,

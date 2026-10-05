@@ -23,3 +23,5 @@ yarn-error.log*
 coverage/
 .vite/
 *.tsbuildinfo
+test-results/
+.playwright-browsers/

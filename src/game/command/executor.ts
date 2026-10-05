@@ -9,11 +9,16 @@
  *   - 一切 git 操作都经 `gitApi.*`，本层不直接触碰 fs / isomorphic-git；
  *   - 返回结构刻意贴近 `CommandEntry`（§4.4），UI 只需补 id / input / tokens / ts。
  *
- * ⚠️ 关于「undoable」：§6.2 规定撤销类命令（reset / revert / checkout -- / stash drop）才记
- * `undoable`。M4 的分支命令（branch / checkout <branch> / switch / merge / rebase / rm）
+ * ⚠️ 关于「undoable」：§6.2 的撤销类清单（reset / revert / checkout -- / stash drop）
+ * 经 M7 复核收窄 —— **只有「回退/改写历史」型撤销才计入惩罚**：
+ *   - `reset`（含 --hard）与 `checkout -- <path>`：移动 HEAD / 丢弃工作区，属回退；
+ *   - `revert` / `restore` **不再计入**（M7 用户裁定）：revert 生成反向提交、不改写
+ *     历史，restore 是「从归档版本精确恢复」—— 两者都是第五章教学关卡期望玩家
+ *     使用的修复手段，计入会惩罚「照目标剧本正确操作」的行为（5-3/5-4/5-5/5-6）。
+ * M4 的分支命令（branch / checkout <branch> / switch / merge / rebase / rm）
  * 与 **M5b 的远程命令（remote / clone / push / fetch / pull）** 都**不属于撤销类**
- * （§7.2 字面清单只含上述四者；分支与远程操作是「前进」而非「回退」），
- * 故仍恒为 false。3-5 变基关的评分依赖 optimalMoves（参考命令数），不依赖撤销罚分。
+ * （分支与远程操作是「前进」而非「回退」），恒为 false。
+ * 3-5 变基关的评分依赖 optimalMoves（参考命令数），不依赖撤销罚分。
  *
  * ⚠️ `git pull` 虽然内含 merge，但它是**获取远程更新**的常规动作，
  * 不是「撤销自己的改动」—— 归入撤销类会让 4-3 的正常流程平白扣分。
@@ -112,15 +117,19 @@ function renderError(error: GitCommandError): string {
 }
 
 /**
- * §6.2 规定的**撤销类命令**的用户可见口径，供本文件各 case 判断 `undoable`：
- *   - `reset`（三模式都属回退；`--hard` 的破坏性由关卡叙事承担，此处不额外区分）；
- *   - `revert`（生成反向提交，属「撤销已归档的改动」）；
- *   - `restore` / `checkout -- <path>`（丢弃工作区改动、撤销暂存）。
+ * `undoable` 的用户可见口径（M7 复核后），供本文件各 case 判断：
+ *   - `reset`（三模式都属回退/改写历史；`--hard` 的破坏性由关卡叙事承担，此处不额外区分）；
+ *   - `checkout -- <path>`（与 reset 同向的粗放覆盖 —— 保留惩罚；
+ *     与 restore 的「精确恢复」形成教学对比）。
  *
- * ⚠️ **`git reflog` 不算撤销**：它是只读命令，属 §7.3 的「探查奖励」——
- * 5-6 的教学剧本里玩家要先 `reflog` 查看再恢复，把查看也算撤销会平白扣分。
- * 因此下面各 case 直接传 `true`，而不是按 verb 查表统一判定（`checkout`
- * 的撤销性取决于是否有路径参数，无法只按 verb 决定）。
+ * **不记 undoable** 的易混淆命令：
+ *   - `revert`：生成反向提交、历史只增不减，是「已同步场景」的正确解法（5-5）；
+ *   - `restore`：从归档版本精确恢复，是「丢弃改动」关卡的正解（5-3）；
+ *   - `reflog`：只读命令，属 §7.3 的「探查奖励」—— 5-6 的教学剧本里玩家要先
+ *     `reflog` 查看再恢复，把查看也算撤销会平白扣分。
+ *
+ * ⚠️ `checkout` 的撤销性取决于是否有路径参数，无法只按 verb 决定 ——
+ * 因此各 case 直接声明，而不是按 verb 查表统一判定。
  */
 
 /**
@@ -405,7 +414,9 @@ export async function execute(input: string, options: ExecuteOptions = {}): Prom
 
     case 'checkout': {
       // `git checkout -- <pathspec>`（M5a）：丢弃工作区改动，与 `git restore` 同语义。
-      // 记 undoable（§6.2 字面清单里的「checkout --」即此）。
+      // ⚠️ M7 口径：restore 摘出惩罚，但 `checkout --` **保留** undoable ——
+      // 它与 reset 同向（不可控地覆盖工作区），且真 git 也在文档里把它标为危险操作；
+      // 「精确恢复用 restore、粗放丢弃用 checkout --」的教学对比由此体现。
       if (command.paths !== undefined && command.paths.length > 0) {
         return unwrap(await gitCheckoutPaths(command.paths, repoOptions), tokens, (result) =>
           succeed(
@@ -535,7 +546,6 @@ export async function execute(input: string, options: ExecuteOptions = {}): Prom
                 ? `已把 ${path} 移出暂存区（工作区内容保留）`
                 : `已把 ${path} 恢复到暂存区的版本（工作区改动已丢弃）`,
             ),
-            true,
           ),
       );
     }
@@ -548,7 +558,6 @@ export async function execute(input: string, options: ExecuteOptions = {}): Prom
             `[${result.hash.slice(0, 7)}] ${result.message}`,
             `已生成一条反向提交，抵消 ${result.reverted.slice(0, 7)} 的改动 —— 历史向前延伸，而不是被改写。`,
           ],
-          true,
         ),
       );
     }

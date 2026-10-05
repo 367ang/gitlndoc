@@ -22,6 +22,7 @@ import { getUnlockedHints } from '../../../game/validate/stepHints'
 import { evaluateScore } from '../../../game/scoring/score'
 import { getChapterMeta } from '../../../levels/chapters'
 import { useSessionStore } from '../../../store/sessionStore'
+import { useProgressStore } from '../../../store/progressStore'
 import { useViewStore } from '../../../store/viewStore'
 import { CommandHistory } from '../history/CommandHistory'
 import { BranchPanel } from '../gitGraph/BranchPanel'
@@ -46,6 +47,8 @@ export function LevelScreen() {
   const resetDraft = useSessionStore((state) => state.resetDraft)
   const appendEntry = useSessionStore((state) => state.appendEntry)
   const markHintUsed = useSessionStore((state) => state.markHintUsed)
+  // M7 设置开关：关闭提示时不渲染 HintsPanel（见下方 JSX 处的说明）
+  const hintsEnabled = useProgressStore((state) => state.settings.hintsEnabled)
   const goMenu = useViewStore((state) => state.goMenu)
   const goChapter = useViewStore((state) => state.goChapter)
   const goLevelComplete = useViewStore((state) => state.goLevelComplete)
@@ -234,8 +237,10 @@ export function LevelScreen() {
             missingHint={stillMissingHint(failures)}
           />
 
-          {/* M3 分步提示：解锁一条记一次提示扣分（markHintUsed 内部单调递增） */}
-          <HintsPanel hints={hints} onHintUsed={markHintUsed} />
+          {/* M3 分步提示：解锁一条记一次提示扣分（markHintUsed 内部单调递增）。
+              M7 设置开关：hintsEnabled=false 时不渲染面板（玩家自主解题，
+              也自然 0 提示扣分 —— no-hint 成就照常可判）。 */}
+          {hintsEnabled && <HintsPanel hints={hints} onHintUsed={markHintUsed} />}
 
           <div className={styles.terminalBlock}>
             <h2 className={styles.panelTitle}>终端</h2>

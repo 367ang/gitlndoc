@@ -8,10 +8,14 @@
 
 import { create } from 'zustand'
 import {
+  DEFAULT_SETTINGS,
   loadAchievements,
   loadProgress,
+  loadSettings,
   saveAchievements,
   saveProgress,
+  saveSettings,
+  type Settings,
 } from '../persistence/progress'
 
 /** 单关记录：得分 / 星级 / 是否通关（§7.4 星级为 0~3 星） */
@@ -26,6 +30,11 @@ export interface ProgressState {
   levelRecords: Record<string, LevelRecord>
   /** 已获得成就的 id 集合 */
   achievements: string[]
+  /**
+   * 用户设置（M7：`gtp:settings:v1` 的 UI 消费方落地 —— 此前只有读写函数）。
+   * `hintsEnabled: false` 时 HintsPanel 不渲染（玩家要自主解题，也自然 0 提示扣分）。
+   */
+  settings: Settings
 
   /** 写回单关记录（结算时调用；星级由 game/scoring 层算好后传入） */
   setLevelRecord: (levelId: string, record: LevelRecord) => void
@@ -33,6 +42,8 @@ export interface ProgressState {
   unlockAchievement: (id: string) => void
   /** 是否已解锁某成就 */
   hasAchievement: (id: string) => boolean
+  /** 整体覆写设置并落盘（菜单设置开关用） */
+  setSettings: (settings: Settings) => void
   /**
    * 从持久化存储加载进度与成就（M5a）。
    *
@@ -51,6 +62,7 @@ const EMPTY_ACHIEVEMENTS: string[] = []
 export const useProgressStore = create<ProgressState>()((set, get) => ({
   levelRecords: {},
   achievements: EMPTY_ACHIEVEMENTS,
+  settings: { ...DEFAULT_SETTINGS },
 
   setLevelRecord: (levelId, record) =>
     set((state) => {
@@ -71,8 +83,17 @@ export const useProgressStore = create<ProgressState>()((set, get) => ({
 
   hasAchievement: (id) => get().achievements.includes(id),
 
+  setSettings: (settings) => {
+    saveSettings(settings)
+    set({ settings: { ...settings } })
+  },
+
   hydrate: () => {
-    set({ levelRecords: loadProgress(), achievements: loadAchievements() })
+    set({
+      levelRecords: loadProgress(),
+      achievements: loadAchievements(),
+      settings: loadSettings(),
+    })
   },
 
   resetProgress: () => {
@@ -83,7 +104,7 @@ export const useProgressStore = create<ProgressState>()((set, get) => ({
 }))
 
 // ⚠️ M5a 已清偿 M1 的 TODO：进度/成就接入 localStorage（键见 persistence/progress.ts）。
-// 仍未落地的：`gtp:settings:v1` 有读写函数但尚无 UI 消费方（属 M7 打磨）；
+// M7 已清偿 M5 遗留 5：`gtp:settings:v1` 的 UI 消费方落地（菜单设置开关 + HintsPanel 隐藏）。
 // 仓库快照见 `src/persistence/snapshot.ts`（走 LightningFS 自身的 IndexedDB 持久化）。
 //
 // ⚠️ M3 遗留 2 的口径复核已完成：`startLevel` 的 `firstAttempt` 判定读的是

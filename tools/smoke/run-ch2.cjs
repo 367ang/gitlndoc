@@ -81,7 +81,7 @@ const H = require('./cdp-client.cjs');
   const summary = await H.evalJs(`document.querySelector('[data-testid="progress-summary"]')?.textContent ?? ''`);
   // ⚠️ 分母随里程碑增长：M1=14 → M5a=20（ch5 注册）→ **M5b=25（ch4 注册）**。
   //    分子恒为 8（本段只通关 ch1 + ch2 共 8 关）。
-  H.check('汇总 8/25', summary.includes('通关 8/25'), summary.slice(0, 60));
+  H.check('汇总 8/32', summary.includes('通关 8/32'), summary.slice(0, 60));
 
   const ok = H.summarize('段1 ch2');
   process.exit(ok ? 0 : 1);

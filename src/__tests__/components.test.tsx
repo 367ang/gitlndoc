@@ -41,6 +41,7 @@ import { LevelScreen } from '../ui/components/level/LevelScreen'
 import { useSessionStore } from '../store/sessionStore'
 import { useProgressStore } from '../store/progressStore'
 import { useViewStore } from '../store/viewStore'
+import { loadSettings } from '../persistence/progress'
 import { HintsPanel } from '../ui/components/level/HintsPanel'
 import { LevelComplete } from '../ui/components/level/LevelComplete'
 import { MenuScreen } from '../ui/components/menu/MenuScreen'
@@ -967,6 +968,26 @@ describe('components —— MenuScreen（M3 汇总与成就入口，M6 收官增
     expect(items).toHaveLength(6)
     expect(items[0]!.dataset.unlocked).toBe('true')
     expect(items[1]!.dataset.unlocked).toBe('false')
+  })
+
+  it('M7 设置开关：点击切换 hintsEnabled 且写入持久化（gtp:settings:v1 消费方落地）', () => {
+    useProgressStore.setState({ levelRecords: {}, achievements: [] })
+    useProgressStore.setState({ settings: { hintsEnabled: true } })
+    render(<MenuScreen />)
+
+    const toggle = screen.getByTestId('hints-toggle')
+    expect(toggle.getAttribute('aria-pressed')).toBe('true')
+    expect(toggle.textContent).toContain('提示开')
+
+    fireEvent.click(toggle)
+    expect(useProgressStore.getState().settings.hintsEnabled).toBe(false)
+    expect(toggle.getAttribute('aria-pressed')).toBe('false')
+    // 已落盘（菜单页直接消费同一 store，刷新后经 hydrate 恢复）
+    expect(loadSettings().hintsEnabled).toBe(false)
+
+    fireEvent.click(toggle)
+    expect(useProgressStore.getState().settings.hintsEnabled).toBe(true)
+    expect(loadSettings().hintsEnabled).toBe(true)
   })
 })
 

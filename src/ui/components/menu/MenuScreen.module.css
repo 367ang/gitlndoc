@@ -189,6 +189,20 @@
   color: var(--gtp-color-text);
 }
 
+/* 提示开关（M7）：aria-pressed 驱动两态观感 —— 开（星色描边）与关（降透明度） */
+.hintsToggle[aria-pressed='true'] {
+  border-color: var(--gtp-color-star);
+  color: var(--gtp-color-star);
+}
+
+.hintsToggle[aria-pressed='false'] {
+  opacity: 0.55;
+}
+
+.hintsToggle:hover {
+  opacity: 1;
+}
+
 /* 结局入口（M6）：全部主线通关后出现在汇总条末尾，星色辉光标识「收官」 */
 .endingEntry {
   padding: var(--gtp-space-1) var(--gtp-space-3);
