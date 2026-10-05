@@ -1,0 +1,59 @@
+# GitHub Pages 部署（阶段 A「发布收口」新增）
+#
+# 纯浏览器 SPA、无后端 —— 静态托管 dist/ 即是完整交付。
+# base 用 /gitlndoc/（项目页路径），由 CLI 注入而非写死 vite.config.ts：
+# 本地 pnpm dev / build 行为不变，只有 Pages 构建带前缀。
+#
+# ⚠️ 仓库 Settings → Pages 的 Source 必须选「GitHub Actions」，
+# 否则 deploy 步骤会报「Pages not enabled」。
+
+name: Deploy Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.5.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - name: 安装依赖（复用 lockfile）
+        run: pnpm install --frozen-lockfile
+
+      - name: 构建（项目页 base 前缀）
+        run: pnpm build --base /gitlndoc/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,53 @@
+# CI 门禁（阶段 A「发布收口」新增）
+#
+# 与本地三门禁对齐：typecheck + test:run + build；另跑 Playwright E2E 主链路。
+# 分段 CDP 冒烟不进 CI —— 依赖本机 Chrome 路径发现（/Applications/...），
+# 属 macOS 本机验收，继续按 tools/smoke/README.md 的方法人工执行。
+#
+# 版本钉：node 26 / pnpm 12.5.1 与开发机实测一致（Node v26.9.0 / pnpm 12.5.1）。
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    env:
+      # 与本机一致：Playwright 浏览器装进工作区（HOME 缓存目录权限问题，见
+      # docs/milestones/M7-tasks.md「实测环境事实」第 4 条）
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.5.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - name: 安装依赖（复用 lockfile）
+        run: pnpm install --frozen-lockfile
+
+      - name: 门禁 1 — typecheck
+        run: pnpm typecheck
+
+      - name: 门禁 2 — test
+        run: pnpm test:run
+
+      - name: 门禁 3 — build
+        run: pnpm build
+
+      - name: E2E（Playwright 主链路）
+        run: |
+          pnpm exec playwright install --with-deps chromium
+          pnpm e2e

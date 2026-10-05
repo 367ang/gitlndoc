@@ -11,7 +11,7 @@
 
 游戏内容并非凭空设计：每篇 Git 学习笔记都拆分为若干**知识点小节**，每个关卡通过 `relatedKnowledge` 引用具体小节（形如 `git-branches#merge-conflict`），测试会反查这些小节标题是否真实存在 —— 因此**笔记是关卡的知识依据，且被测试锁定**。
 
-**当前进度**：M1–M4 已完成，第一 ~ 三章可玩（`ch1` 4 关 + `ch2` 4 关 + `ch3` 6 关，共 14 关）；第四 ~ 六章与终章在章节菜单中呈**禁用态**，尚未落地。三门禁（`typecheck` / `test` / `build`）全绿：**228 passed**，构建产物约 169.7 kB gzip。详见 [AGENTS.md](./AGENTS.md) 的「当前状态」与 [docs/milestones/](./docs/milestones/)。
+**当前进度**：**v1.0.0 已发布** —— 全部里程碑（M1–M7）收官，游戏处于正式发布状态。**全游戏 32 关可玩**（`ch1` 4 关 + `ch2` 4 关 + `ch3` 6 关 + `ch4` 5 关 + `ch5` 6 关 + `ch6` 5 关 + 终章 `F` 2 关）。三门禁（`typecheck` / `test` / `build`）全绿：**410 passed**（12 文件），构建产物约 195.6 kB gzip（3 chunk，无警告）。另有 Playwright E2E（`pnpm e2e`）与七段真实浏览器冒烟（七段合计 152/152，见 `tools/smoke/`）。发布收口内容（CI 门禁 + GitHub Pages 部署 + 版本定格）见 [docs/milestones/M8-release-tasks.md](./docs/milestones/M8-release-tasks.md)；里程碑全史见 [AGENTS.md](./AGENTS.md) 的「当前状态」与 [docs/milestones/](./docs/milestones/)。
 
 ## 🚀 快速入门
 
@@ -125,26 +125,33 @@ git push -u origin feature/your-feature
 │   ├── levels/                   # ── 关卡数据 ──
 │   │   ├── schema.ts             #   关卡类型守卫与校验
 │   │   ├── presets.ts            #   关卡初始化的模板文件内容
-│   │   └── chapters/             #   ch1.ts / ch2.ts / ch3.ts / index.ts（章节注册表）
+│   │   └── chapters/             #   ch1~ch6 + final（章节注册表 index.ts）
 │   ├── store/                    # ── 状态：sessionStore / progressStore / viewStore ──
 │   ├── ui/                       # ── UI Layer（纯展示）──
 │   │   ├── components/           #   menu / chapter / level / terminal / history /
 │   │   │                         #   fileTree / gitGraph / goalPanel
 │   │   └── hooks/                #   useTargetState / useCompletionCandidates
 │   ├── styles/                   # 设计令牌与全局样式（tokens.css / global.css）
-│   └── __tests__/                # Vitest 用例（7 个测试文件 + setup.ts）
+│   └── __tests__/                # Vitest 用例（12 个测试文件 + setup.ts，410 用例）
 │
 ├── docs/                         # 全部文档
 │   ├── notes/                    # 9 篇 Git 学习笔记 —— 关卡设计的知识依据
 │   ├── notes-change-log.md       # 笔记重构变更日志（改笔记必须追加记录于此）
-│   └── milestones/               # 逐里程碑的任务拆解与执行结果（M1-preflight / M1 / M2 / M3 / M4）
+│   └── milestones/               # 逐里程碑的任务拆解与执行结果（M1-preflight / M1~M7 / M8-release）
 │
 ├── tools/
 │   └── smoke/                    # Node 侧真实浏览器分段冒烟脚本（CDP 驱动，不被 SPA 引用）
 │       ├── cdp-client.cjs        #   共享库：连接、进度种子、条件轮询 waitFor
 │       ├── run-legacy.cjs        #   段3：1-4 完整通关补测 + 未通关锁定态
 │       ├── run-ch2.cjs           #   段1：ch2 全关冒烟
-│       └── run-ch3.cjs           #   段2：ch3 全关冒烟
+│       ├── run-ch3.cjs           #   段2：ch3 全关冒烟
+│       ├── run-ch5.cjs           #   段4：ch5 全关冒烟（M5a）
+│       ├── run-ch4.cjs           #   段5：ch4 全关冒烟（M5b）
+│       ├── run-ch6.cjs           #   段6：ch6 + 收官 UI 冒烟（M6）
+│       └── run-final.cjs         #   段7：终章 F + perfect-game 冒烟（M7）
+│
+├── e2e/                          # Playwright E2E 主链路（M7；pnpm e2e）
+├── .github/workflows/            # CI 三门禁（ci.yml）+ GitHub Pages 部署（deploy-pages.yml）
 │
 ├── practice/
 │   └── server/gitrunner.mjs      # Node 侧沙箱设计参照（子命令白名单）；非 SPA 引用的代码
@@ -163,24 +170,26 @@ git push -u origin feature/your-feature
 
 ### 9 篇 Git 学习笔记
 
-这 9 篇笔记**并非地位相同的并列文档**，而是分三类。判定依据是 [game-design.md](./game-design.md) §8「内容映射表（笔记 ↔ 关卡）」与 `src/` 中的 `relatedKnowledge` 引用。**下表「关联章节」列逐行取自 GDD §8**，章节名沿用 GDD §4 的命名（注：已实现的 ch4–ch6 章节标题在 `src/levels/chapters/index.ts` 中另作「遥远回响 / 时间倒流 / 永恒印记」，此处以 GDD 为准）：
+这 9 篇笔记**并非地位相同的并列文档**，而是分三类。判定依据是 [game-design.md](./game-design.md) §8「内容映射表（笔记 ↔ 关卡）」与 `src/` 中的 `relatedKnowledge` 引用。**下表「关联章节」列逐行取自 GDD §8**，章节名沿用 GDD §4 的命名。游戏侧章节标题与 GDD 一致（`src/levels/chapters/index.ts` 的 `ChapterMeta.title` 已在 M5/M6 实现四~六章与终章时统一为 GDD 章名，见 [development-refinement.md](./development-refinement.md) §3 的「章节命名」小节）。
 
-**① 关卡知识依据** —— 被关卡数据以 `<note>#<slug>` 形式引用；`src/__tests__/levels.test.ts` 会**反查小节标题是否逐字存在于笔记中**，改标题即挂测试。
+### ① 关卡知识依据 —— 已全部接入游戏
+
+被关卡数据以 `<note>#<slug>` 形式引用；`src/__tests__/levels.test.ts` 会**反查小节标题是否逐字存在于笔记中**，改标题即挂测试。
 
 | 笔记 | 关联章节 | 该章游戏进度 |
 |---|---|---|
 | [Git基础概念](./docs/notes/git-basics.md) | 第一章「创世纪元」（1-1 ~ 1-4） | ✅ 已实现（ch1，4 关） |
 | [Git基础操作](./docs/notes/git-basic-operations.md) | 第二章「日常秩序」（2-1 ~ 2-4） | ✅ 已实现（ch2，4 关） |
 | [Git分支管理](./docs/notes/git-branches.md) | 第三章「平行宇宙」（3-1 ~ 3-6） | ✅ 已实现（ch3，6 关） |
-| [Git远程操作](./docs/notes/git-remotes.md) | 第四章「星际连接」（4-1 ~ 4-5） | 🚧 待接入（M5） |
-| [Git撤销操作](./docs/notes/git-undo.md) | 第五章「时空回溯」（5-1 ~ 5-6） | 🚧 待接入（M5） |
+| [Git远程操作](./docs/notes/git-remotes.md) | 第四章「星际连接」（4-1 ~ 4-5） | ✅ 已实现（ch4，5 关，M5b） |
+| [Git撤销操作](./docs/notes/git-undo.md) | 第五章「时空回溯」（5-1 ~ 5-6） | ✅ 已实现（ch5，6 关，M5a） |
+| [Git标签管理](./docs/notes/git-tags.md) | 第六章「历史锚点」（6-1 ~ 6-5） | ✅ 已实现（ch6，5 关，M6） |
 
-**② 待接入** —— 在 GDD §8 中有对应行，但游戏侧尚未实现（`src/levels` 目前**零引用**）。
+**② 横向贯穿** —— 在 GDD §8 中有对应行，但**无独立章节**，其知识点散布在各章关卡中。
 
 | 笔记 | 关联章节 | 说明 |
 |---|---|---|
-| [Git标签管理](./docs/notes/git-tags.md) | 第六章「历史锚点」（6-1 ~ 6-5） | 🚧 待接入（M6） |
-| [Git最佳实践](./docs/notes/git-best-practices.md) | 贯穿各章（merge/rebase、reset/revert、语义化版本等） | 🚧 待接入（无独立章节，横向贯穿） |
+| [Git最佳实践](./docs/notes/git-best-practices.md) | 贯穿各章（merge/rebase、reset/revert、语义化版本等） | ✅ 已实现（无独立章节，横向贯穿；语义化版本对应 6-5） |
 
 **③ 母本速查表** —— **不参与游戏**。
 
@@ -204,8 +213,12 @@ git push -u origin feature/your-feature
 | [M2-tasks](./docs/milestones/M2-tasks.md) | M2（关卡框架 + 第一章可玩）任务与执行结果 |
 | [M3-tasks](./docs/milestones/M3-tasks.md) | M3（计分 / 星级 / 成就）任务与执行结果 |
 | [M4-tasks](./docs/milestones/M4-tasks.md) | M4（第 2–3 章、GitGraph、BranchPanel、Tab 补全、文件编辑）任务与执行结果 |
+| [M5-tasks](./docs/milestones/M5-tasks.md) | M5（撤销与远程、快照持久化；M5a + M5b）任务与执行结果 |
+| [M6-tasks](./docs/milestones/M6-tasks.md) | M6（标签 + 综合终章，全游戏 32 关收官）任务与执行结果 |
+| [M7-tasks](./docs/milestones/M7-tasks.md) | M7（打磨、调参、E2E，发布候选）任务与执行结果 |
+| [M8-release-tasks](./docs/milestones/M8-release-tasks.md) | 阶段 A 发布收口（发布验收复核、CI、GitHub Pages、版本定格 v1.0.0）任务与执行结果 |
 
-> ⚠️ **M5 及以后凡动 `engine/` 或做真实浏览器验收，务必先读 M2 / M3 / M4 三份文档的「实测环境事实」** —— 那里记录了 isomorphic-git 与 LightningFS 的一批反直觉行为（ff merge 不更新工作区、无 rebase 命令、目录 `readFile` 返回 `null`、jsdom 不受 `readOnly` 限制等）。
+> ⚠️ **M5 及以后凡动 `engine/` 或做真实浏览器验收，务必先读 M2 / M3 / M4 三份文档的「实测环境事实」** —— 那里记录了 isomorphic-git 与 LightningFS 的一批反直觉行为（ff merge 不更新工作区、无 rebase 命令、目录 `readFile` 返回 `null`、jsdom 不受 `readOnly` 限制等）。各期引擎事实的完整清单另见 [AGENTS.md](./AGENTS.md)。
 
 ## 🧭 架构速览
 
@@ -261,6 +274,10 @@ Git 核心知识
 ## Language
 
 对于 commit 的描述性内容请使用中文。
+
+## 在线游玩
+
+游戏发布于 GitHub Pages（`v1.0.0` 起）：**https://367ang.github.io/gitlndoc/**（发布方式见 [docs/milestones/M8-release-tasks.md](./docs/milestones/M8-release-tasks.md)）。本地运行见上方「快速入门」。
 
 ## 参考资源
 

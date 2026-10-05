@@ -18,7 +18,7 @@
 
 ## 当前状态
 
-**M1（地基）～ M7（打磨、调参、E2E；提示分级扣分 + 星级分数主轴 + undoable 收窄 + 设置开关 + 32 关可达性总回归 + Playwright E2E + 真机终章/perfect-game 验收 + code-split）全部完成**，三门禁当前为 **`typecheck` 0 / `test` 410 passed（12 文件）/ `build` 195.6 kB gzip（3 chunk 无警告）**（M7 实测）。全游戏 **32 关可玩**（ch1:4 + ch2:4 + ch3:6 + ch4:5 + ch5:6 + ch6:5 + F:2）。**全部规划里程碑（M1–M7）已收官，项目为发布候选状态**。
+**M1（地基）～ M8（发布收口）全部完成，项目已正式发布（v1.0.0，GitHub Pages）**。M1–M7 为规划里程碑（M7 = 发布候选：提示分级扣分 + 星级分数主轴 + undoable 收窄 + 设置开关 + 32 关可达性总回归 + Playwright E2E + 真机终章/perfect-game 验收 + code-split）；**M8（非规划内，用户拍板的「阶段 A」）完成发布验收复核（三门禁 + E2E + 七段冒烟全量重放）、CI 门禁（`.github/workflows/ci.yml`）、GitHub Pages 部署（`deploy-pages.yml`，`--base /gitlndoc/`）、版本定格 `package.json` 1.0.0 与文档收口**，记录见 `docs/milestones/M8-release-tasks.md`。三门禁当前为 **`typecheck` 0 / `test` 410 passed（12 文件）/ `build` 195.6 kB gzip（3 chunk 无警告）**（M8 实测，与 M7 一致 —— 发布收口不改 `src/`）。全游戏 **32 关可玩**（ch1:4 + ch2:4 + ch3:6 + ch4:5 + ch5:6 + ch6:5 + F:2）。
 
 ⚠️ **M7 的两条计分口径变更（后续动关卡数据 / 计分层前必读，详见 M7-tasks.md §二）**：
 
@@ -151,7 +151,7 @@ pnpm smoke:final     # M7 新增（终章 F 两关真机通关 + perfect-game �
 ## 仓库状态与注意事项
 
 - **`.gitignore` 已补齐**（涵盖 `node_modules/`、`dist/`、日志、编辑器与系统文件等）。历史提交 `08361a4`、`d1a259c` 曾声称添加过它，但此前工作树中并不存在；现有文件为本仓库实际的忽略规则来源。
-- **`docs/milestones/` 存放里程碑相关的规划与检查文档**（每期一份，记录任务拆解与执行结果）：`M1-preflight.md`（M1 开工前的环境核查）、`M1-tasks.md`、`M2-tasks.md`、`M3-tasks.md`、`M4-tasks.md`、`M5-tasks.md`、`M6-tasks.md`、`M7-tasks.md`。
+- **`docs/milestones/` 存放里程碑相关的规划与检查文档**（每期一份，记录任务拆解与执行结果）：`M1-preflight.md`（M1 开工前的环境核查）、`M1-tasks.md`、`M2-tasks.md`、`M3-tasks.md`、`M4-tasks.md`、`M5-tasks.md`、`M6-tasks.md`、`M7-tasks.md`、`M8-release-tasks.md`。
   - **文件名不带状态后缀** —— 完成状态由 `docs/milestones/README.md` 的索引表表达，**不要**再用 `-DONE` / `-TODO` 后缀命名（该约定已废弃）。
   - **新里程碑**直接在本目录新建 `<里程碑名>-tasks.md`（如 `M5-tasks.md`），并同步在 `docs/milestones/README.md` 补一行索引。
 - 设计文档（`game-design.md`、`development-refinement.md`）**已提交入库**，且成文于任何 `src/` 代码存在之前。本文件通篇引用的章节编号（§2–§14）目前在这些文档中是稳定的；但若你改动了这些文档，请同步更新此处的交叉引用。
@@ -176,4 +176,4 @@ isomorphic-git 对 `revert`/`stash`/`pull` 自动合并的支持不完整 ——
 
 ## 里程碑
 
-推进顺序为 M1（地基）→ M2（关卡框架 + 第一章）→ M3（计分 / 星级 / 成就）→ M4（第 2–3 章、GitGraph、BranchPanel、Tab 补全）→ M5（撤销与远程、快照持久化）→ M6（标签 + 综合终章）→ M7（打磨、调参、E2E）。**每个阶段结束时都必须运行 `typecheck` + `test` + `build`**，确保 `main` 始终可运行。各期定义与当前进度见 `development-refinement.md` §13 与 `docs/milestones/README.md`。
+推进顺序为 M1（地基）→ M2（关卡框架 + 第一章）→ M3（计分 / 星级 / 成就）→ M4（第 2–3 章、GitGraph、BranchPanel、Tab 补全）→ M5（撤销与远程、快照持久化）→ M6（标签 + 综合终章）→ M7（打磨、调参、E2E）→ M8（发布收口：CI + GitHub Pages + v1.0.0）。**每个阶段结束时都必须运行 `typecheck` + `test` + `build`**，确保 `main` 始终可运行。各期定义与当前进度见 `development-refinement.md` §13 与 `docs/milestones/README.md`。

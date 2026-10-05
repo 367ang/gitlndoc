@@ -153,24 +153,21 @@ src/
 - `ui/hooks/` 下实际仅有 `useTargetState.ts` 与 `useCompletionCandidates.ts`。
 - `__tests__/` 实际有 **7** 个测试文件（§3 只列了 4 个）：另有 `targetState.test.ts`(32)、`levels.test.ts`(56)、`inputMode.test.ts`(12)，及 `setup.ts`（`fake-indexeddb/auto` 必须保留，缘由见 `docs/milestones/M1-tasks.md`）。
 
-**章节命名双轨（文档 vs 代码，⚠️ 待统一）**
+**章节命名（文档 vs 代码，✅ 已统一）**
 
-GDD `game-design.md` §4 的章名与代码 `src/levels/chapters/index.ts` 的 `ChapterMeta.title` **不一致**。实测对照：
+GDD `game-design.md` §4 的章名与代码 `src/levels/chapters/index.ts` 的 `ChapterMeta.title` 曾经不一致（代码侧章名是 M2 阶段自行拟定的），**已在 M5/M6 实现四~六章与综合终章时按「以 GDD 为准」统一**。当前对照：
 
 | 章 | GDD（`game-design.md` §4） | 代码（`ChapterMeta.title`） | 一致？ |
 | --- | --- | --- | --- |
 | 第一章 | 创世纪元 | 创世纪元 | ✅ |
 | 第二章 | 日常秩序 | 日常秩序 | ✅ |
 | 第三章 | 平行宇宙 | 平行宇宙 | ✅ |
-| 第四章 | 星际连接 | 遥远回响 | ❌ |
-| 第五章 | 时空回溯 | 时间倒流 | ❌ |
-| 第六章 | 历史锚点 | 永恒印记 | ❌ |
-| 终章 | 大统一 | 时间线终点 | ❌ |
+| 第四章 | 星际连接 | 星际连接 | ✅ |
+| 第五章 | 时空回溯 | 时空回溯 | ✅ |
+| 第六章 | 历史锚点 | 历史锚点 | ✅ |
+| 终章 | 大统一 | 大统一 | ✅ |
 
-- **成因**：GDD 是叙事基线的唯一事实来源，成文在前；代码侧章名是 M2 阶段自行拟定的。
-- **待统一**：建议**以 GDD 为准**，在 M5/M6 实现四至六章与综合终章时一并修改 `ChapterMeta.title`。
-- **本次不修改的理由**：改代码 title 会影响 UI 显示与可能的测试断言，改 GDD 则等于放弃叙事基线 —— 两者都超出「目录整理」的范围，故**仅记录、不修改**。
-- **现状影响**：ch4~ch6 与 F 当前 `playable: false`（尚未实现），玩家尚看不到这些名称，因此该不一致暂无用户可见影响。
+> 历史注记（M2 记录，已解决）：曾拟以代码侧「遥远回响 / 时间倒流 / 永恒印记 / 时间线终点」命名 ch4~F，与 GDD 叙事基线冲突。M5/M6 实现时按 GDD 章名落地，本小节由「⚠️ 待统一」订正为「✅ 已统一」。
 
 ---
 

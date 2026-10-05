@@ -18,6 +18,7 @@
 | M5（撤销与远程、快照持久化） | [M5-tasks.md](M5-tasks.md) | ✅ **完成**（M5a + M5b） | **拆为两批，均已交付**：**M5a** 第五章 6 关（reset/restore/amend/revert/reflog）+ 快照持久化 + 刷新自动恢复中途进度；**M5b** 第四章 5 关 + 本地内存裸仓库 + 进程内智能 HTTP 服务端 |
 | M6（标签与综合终章） | [M6-tasks.md](M6-tasks.md) | ✅ **完成** | 第六章「历史锚点」5 关（tag/show/describe + push 标签）+ 终章 F 两关（综合修复 / 完整交付）+ perfect-game 成就 + intro/结局真实化 + GitGraph 标签徽标 —— **全游戏 32 关可玩** |
 | M7（打磨、调参、E2E） | [M7-tasks.md](M7-tasks.md) | ✅ **完成** | 提示分级扣分（GDD §5.1 −5/−10/−20）+ 星级回归 §5.2 分数主轴 + undoable 名单收窄 + 设置开关 UI + **全 32 关可达性总回归** + Playwright E2E + 真机终章 F/perfect-game 验收（冒烟段7）+ code-split —— **发布候选** |
+| M8（发布收口） | [M8-release-tasks.md](M8-release-tasks.md) | ✅ **完成** | 发布验收复核（三门禁 + E2E + 七段冒烟全量重放）+ CI 门禁工作流 + GitHub Pages 部署工作流（`--base /gitlndoc/`，前缀实测验证）+ 版本定格 **v1.0.0** + README/工程文档/AGENTS 状态收口 —— **正式发布** |
 
 ### M1 两篇文档的关系
 
@@ -37,6 +38,7 @@
 | M5b | 0 错误 | **378 passed**（11 文件），0 todo | **187.61 kB** |
 | M6 | 0 错误 | **399 passed**（11 文件），0 todo | **194.78 kB** |
 | M7 | 0 错误 | **410 passed**（12 文件），0 todo | **195.6 kB**（3 chunk，无警告） |
+| M8 | 0 错误 | **410 passed**（12 文件），0 todo | **195.6 kB**（3 chunk，无警告；发布收口不改 `src/`） |
 
 构建预算见 `development-refinement.md` §12（约 350 kB），当前余量充足。
 
