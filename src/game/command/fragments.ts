@@ -73,6 +73,56 @@ function fragment(command: string, slot: number, text: string, label: string): F
 }
 
 /**
+ * 提取某条命令组的**整词快捷片段**（M9 体验修正）：
+ * 把 slot0（起始词 `git`）与 slot1（子命令）合成一个「一步到位」的按钮 ——
+ * 玩家点 `git add` 一次就得到 `git add`，而不是先点 `git` 再点 `add`。
+ *
+ * ⚠️ 返回的片段仍是 slot 1 的语义（`text` = 子命令 token），它写入草稿后
+ * 与「先点 slot0 再点 slot1」的结果完全一致 —— 这由下方 `clickWordFragment`
+ * 的自动补前缀保证，槽位模型不变，`isFragmentEnabled` 的置灰闸门继续成立。
+ */
+export function wordFragment(command: string, pool: readonly Fragment[]): Fragment | null {
+  const slot1 = pool.find((item) => item.command === command && item.slot === 1);
+  const slot0 = pool.find((item) => item.command === command && item.slot === 0);
+  if (!slot1 || !slot0) return null;
+  return { ...slot1, id: `${command}::word`, label: command };
+}
+
+/**
+ * 从片段池提取各命令组的整词快捷按钮（去重保序）。
+ * UI 层用它渲染「主按钮行」；slot0 的裸 `git` 按钮**不再渲染** ——
+ * 同一文本 `git` 在每个命令组各有一个 slot0，全部渲染就是 16 个一模一样的
+ * 重复按钮（实测反馈「拼接词重复出现」的根源）。
+ */
+export function wordFragments(pool: readonly Fragment[]): Fragment[] {
+  const commands: string[] = [];
+  for (const item of pool) {
+    if (item.slot === 1 && !commands.includes(item.command)) commands.push(item.command);
+  }
+  return commands
+    .map((command) => wordFragment(command, pool))
+    .filter((item): item is Fragment => item !== null);
+}
+
+/**
+ * 点击整词快捷片段（或任意 slot ≥ 1 的片段）后的草稿：
+ * 若其命令组的 slot0（起始词）尚未就位，自动补上 —— 玩家永远不需要点「git」。
+ */
+export function clickWordFragment(draft: Draft, next: Fragment, pool: readonly Fragment[]): Draft {
+  const hasNextCommand = draft.slots.some(
+    (item) => item !== undefined && item.command === next.command,
+  );
+  if (hasNextCommand) return applyFragment(draft, next, pool);
+
+  // 换命令 / 起步：先让 slot0（起始词）就位，再走 applyFragment 的既有替换语义。
+  // applyFragment 会丢弃不可沿用的旧槽位并保留公共前缀 `git`。
+  const gitSlot = pool.find((item) => item.command === next.command && item.slot === 0);
+  if (gitSlot === undefined) return applyFragment(draft, next, pool);
+  const withPrefix = draft.slots[0] !== undefined ? draft : applyFragment(draft, gitSlot, pool);
+  return applyFragment(withPrefix, next, pool);
+}
+
+/**
  * 第一章命令集（用户裁定，2025-09）：`init` / `add` / `commit`。
  *
  * ⚠️⚠️ **槽位不重叠**是这张表的硬约束（实测过的真实缺陷）：

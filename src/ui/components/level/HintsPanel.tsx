@@ -53,7 +53,9 @@ export function HintsPanel({ hints, defaultOpen = false, onHintUsed }: HintsPane
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
       >
-        提示（已解锁 {hints.unlocked.length} 条{hints.hasMore ? ` · 再失败 ${hints.failuresUntilNext} 次可得下一条` : ' · 已全部解锁'}）
+        <span className={styles.toggleText}>
+          💡 提示（已解锁 {hints.unlocked.length} 条{hints.hasMore ? ` · 再失败 ${hints.failuresUntilNext} 次可得下一条` : ' · 已全部解锁'}）
+        </span>
         <span className={styles.arrow} aria-hidden="true">
           {open ? '▾' : '▸'}
         </span>

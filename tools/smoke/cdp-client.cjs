@@ -237,14 +237,13 @@ async function backToMenu() {
 /* ── 命令执行原语 ─────────────────────────────────────────────────────── */
 
 /**
- * 点击一个片段按钮。
- * @param frag 'init' / 'add' / '.' / '-m' / 'diary.md' / 'git'（slot0）等
+ * 点击一个片段按钮（M9：优先走整词按钮）。
+ * @param frag 'init' / 'add' / '.' / '-m' / 'diary.md' 等子命令或参数
  *
  * 定位策略（data 属性由 CommandBuilder 渲染，每组唯一）：
- *   - slot1：data-command === 'git <frag>' 的子命令按钮（唯一）；
- *   - slot2：data-command === 'git <frag>' 且文本等于 frag 的参数按钮；
- *   - slot0：frag === 'git' 时点当前命令组的 slot0（组由「已填草稿」推断不可靠，
- *     故 slot0 仅在 needGit 显式传入 data-command 时使用）。
+ *   - 子命令：整词按钮「git <frag>」（aria「拼接命令：git <frag>」）——
+ *     M9 起 slot0/slot1 片段不再渲染，起始词由组件自动补齐；
+ *   - slot2：data-command === 'git <frag>'（或组内）且文本等于 frag 的参数按钮。
  */
 async function clickFrag(frag, command) {
   // command：可选的命令组名（如 'add' / 'rm' / 'commit'）—— 用于 slot2 参数的组级定位
@@ -252,46 +251,20 @@ async function clickFrag(frag, command) {
   //   传 command 时在 'git <command>' 组内找 slot2；不传时全局找未禁用的同名 slot2。
   const group = command ?? frag;
 
-  /** 定位片段：返回 { el, needSlot0 } 或 null */
-  const locate = evalJs(`(() => {
-    const all = [...document.querySelectorAll('button[data-command]')];
-    let el;
-    el = all.find(b => b.dataset.slot === '1' && b.dataset.command === 'git ${frag}');
-    if (!el) el = all.find(b => b.dataset.command === 'git ${group}' && b.dataset.slot === '2' && b.textContent === '${frag}');
-    if (!el) el = all.find(b => b.dataset.slot === '2' && b.textContent === '${frag}' && !b.disabled);
-    if (!el) return 'nf';
-    return { ariaLabel: el.ariaLabel, disabled: el.disabled, group: el.dataset.command };
-  })()`);
-
-  const found = await locate;
-  if (found === 'nf') throw new Error(`clickFrag 找不到片段：${frag}（group=${group}）`);
-
-  if (found.disabled) {
-    // ⚠️ React 18 批处理：slot0 与 slot1 的点击**不可在同一同步块**里 ——
-    // slot0.click() 触发的 setState 尚未提交，slot1 的 disabled 仍是 true，
-    // click() 会被浏览器忽略（实测）。必须等 React 提交后再点 slot1。
-    const slot0 = await evalJs(`(() => {
-      const all = [...document.querySelectorAll('button[data-command]')];
-      const slot0 = all.find(b => b.dataset.command === ${JSON.stringify(found.group)} && b.dataset.slot === '0' && !b.disabled);
-      if (!slot0) return 'nf:slot0';
-      slot0.click();
-      return 'ok';
-    })()`);
-    if (slot0 === 'nf:slot0') throw new Error(`clickFrag：${frag} 的 slot0 不可点`);
-    await sleep(150); // React 提交周期
-  }
-
-  // slot0 就绪后（置灰已解除）正式点击目标片段
   const clicked = await evalJs(`(() => {
     const all = [...document.querySelectorAll('button[data-command]')];
-    let el;
-    el = all.find(b => b.dataset.slot === '1' && b.dataset.command === 'git ${frag}' && !b.disabled);
-    if (!el) el = all.find(b => b.dataset.command === 'git ${group}' && b.dataset.slot === '2' && b.textContent === '${frag}' && !b.disabled);
+    // 子命令优先：整词按钮（M9 的一步拼接入口）
+    const word = all.find(b => b.ariaLabel === '拼接命令：git ${frag}');
+    if (word) { word.click(); return 'ok:word:' + word.dataset.command; }
+    // 参数片段：组内定位优先，再退化为全局唯一未禁用的同名 slot2
+    let el = all.find(b => b.dataset.slot === '2' && b.dataset.command === 'git ${group}' && b.textContent === '${frag}');
     if (!el) el = all.find(b => b.dataset.slot === '2' && b.textContent === '${frag}' && !b.disabled);
-    if (!el) return 'nf:disabled';
+    if (!el) return 'nf';
+    if (el.disabled) return 'nf:disabled';
     el.click();
     return 'ok:' + el.dataset.command + '@' + el.dataset.slot;
   })()`);
+  if (clicked === 'nf') throw new Error(`clickFrag 找不到片段：${frag}（group=${group}）`);
   if (clicked === 'nf:disabled') throw new Error(`clickFrag 点击失败（仍置灰）：${frag}`);
   await sleep(80);
   return clicked;

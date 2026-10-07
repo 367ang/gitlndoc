@@ -427,6 +427,19 @@ function fragmentButton(command: string, slot: number): HTMLButtonElement {
   return button
 }
 
+/**
+ * 定位整词快捷按钮（M9）：`button[data-command="git add"]` 且带 word 类。
+ * ⚠️ slot1/2 的片段按钮同样有 data-command，必须用 aria-label 区分
+ * （整词按钮的 aria 是「拼接命令：…」，片段按钮是「拼接命令片段：…」）。
+ */
+function wordButton(command: string): HTMLButtonElement {
+  const button = document.querySelector<HTMLButtonElement>(
+    `button[data-command="${command}"][aria-label="拼接命令：${command}"]`,
+  )
+  if (!button) throw new Error(`找不到整词按钮：${command}`)
+  return button
+}
+
 /** 片段拼出的完整命令（预览区文本；空草稿时组件显示占位符「（空）」） */
 function previewText(): string {
   return screen.getByTestId('command-preview').textContent ?? ''
@@ -447,10 +460,12 @@ describe('components —— CommandBuilder 拼接式输入', () => {
 
     expect(screen.getByTestId('command-builder')).toBeTruthy()
 
-    // 片段按钮：aria-label / data-command / data-slot 三件套
-    const gitAddSub = fragmentButton('git add', 1)
-    expect(gitAddSub.getAttribute('aria-label')).toBe('拼接命令片段：add')
-    expect(gitAddSub.getAttribute('data-slot')).toBe('1')
+    // 片段按钮（M9 只渲染参数片段）：aria-label / data-command / data-slot 三件套
+    const gitAddDot = fragmentButton('git add', 2)
+    expect(gitAddDot.getAttribute('aria-label')).toBe('拼接命令片段：.')
+    expect(gitAddDot.getAttribute('data-slot')).toBe('2')
+    // 整词按钮：aria-label 为「拼接命令：<完整命令>」
+    expect(wordButton('git add').getAttribute('aria-label')).toBe('拼接命令：git add')
 
     // 完整命令预览区带 aria-label，供无障碍与测试共用
     expect(screen.getByLabelText('拼接的完整命令')).toBe(screen.getByTestId('command-preview'))
@@ -460,13 +475,28 @@ describe('components —— CommandBuilder 拼接式输入', () => {
     expect((screen.getByLabelText('执行拼接的命令') as HTMLButtonElement).disabled).toBe(true)
   })
 
+  it('整词按钮一步拼出「git <子命令>」，自动补齐起始词（M9：不再渲染重复的裸 git 按钮）', () => {
+    render(<BuilderHarness level={level} />)
+
+    // 重复的裸 `git` slot0 按钮不再渲染（16 个一模一样的「git」是实测反馈的缺陷）
+    expect(document.querySelectorAll('button[data-slot="0"]').length).toBe(0)
+    // 与整词按钮语义重复的 slot1 子命令按钮也不再渲染（「git add」旁不再有「add」）
+    expect(document.querySelectorAll('button[data-slot="1"]').length).toBe(0)
+
+    // 空草稿直接点整词按钮：一步得到 git add（无需先点 git）
+    fireEvent.click(wordButton('git add'))
+    expect(previewText()).toBe('git add')
+
+    // 再点整词按钮切换命令：公共前缀保留，子命令替换
+    fireEvent.click(wordButton('git commit'))
+    expect(previewText()).toBe('git commit')
+  })
+
   it('点击片段后预览区追加出完整命令，位置不可跳动的按钮保持存在', () => {
     render(<BuilderHarness level={level} />)
 
-    fireEvent.click(fragmentButton('git add', 0))
-    expect(previewText()).toBe('git')
-
-    fireEvent.click(fragmentButton('git add', 1))
+    // M9：起步由整词按钮完成（slot0/slot1 按钮已不渲染）
+    fireEvent.click(wordButton('git add'))
     expect(previewText()).toBe('git add')
 
     fireEvent.click(fragmentButton('git add', 2))
@@ -479,15 +509,13 @@ describe('components —— CommandBuilder 拼接式输入', () => {
   it('不可点的片段带 disabled，且置灰而非隐藏（按钮位置不跳动）', () => {
     render(<BuilderHarness level={level} />)
 
-    // 初始只有 slot 0 可点
-    expect(fragmentButton('git add', 0).disabled).toBe(false)
-    expect(fragmentButton('git add', 1).disabled).toBe(true)
+    // 初始：参数片段（slot 2）全部置灰（起步走整词按钮）
+    expect(wordButton('git add').disabled).toBe(false)
     expect(fragmentButton('git add', 2).disabled).toBe(true)
 
-    // 点过起始词后，子命令解禁，但参数仍不可点
-    fireEvent.click(fragmentButton('git add', 0))
-    expect(fragmentButton('git add', 1).disabled).toBe(false)
-    expect(fragmentButton('git add', 2).disabled).toBe(true)
+    // 点过整词按钮后，参数解禁
+    fireEvent.click(wordButton('git add'))
+    expect(fragmentButton('git add', 2).disabled).toBe(false)
 
     // 按钮始终存在于 DOM（不是条件渲染）
     expect(document.querySelectorAll('button[data-command]').length).toBeGreaterThan(5)
@@ -496,8 +524,7 @@ describe('components —— CommandBuilder 拼接式输入', () => {
   it('手写后缀接在片段之后，完整命令 = 片段 + 后缀', () => {
     render(<BuilderHarness level={level} />)
 
-    fireEvent.click(fragmentButton('git commit', 0))
-    fireEvent.click(fragmentButton('git commit', 1))
+    fireEvent.click(wordButton('git commit'))
     fireEvent.click(fragmentButton('git commit', 2))
     expect(previewText()).toBe('git commit -m')
 
@@ -518,8 +545,7 @@ describe('components —— CommandBuilder 拼接式输入', () => {
     //   故此处直接锁 `readOnly`/`disabled` 属性本身，补上 jsdom 抓不到的那一环。
     render(<BuilderHarness level={level} onRun={() => {}} />)
 
-    fireEvent.click(fragmentButton('git commit', 0))
-    fireEvent.click(fragmentButton('git commit', 1))
+    fireEvent.click(wordButton('git commit'))
     fireEvent.click(fragmentButton('git commit', 2))
     expect(previewText()).toBe('git commit -m')
 
@@ -536,8 +562,7 @@ describe('components —— CommandBuilder 拼接式输入', () => {
     const ran: string[] = []
     render(<BuilderHarness level={level} onRun={(command) => ran.push(command)} />)
 
-    fireEvent.click(fragmentButton('git commit', 0))
-    fireEvent.click(fragmentButton('git commit', 1))
+    fireEvent.click(wordButton('git commit'))
     fireEvent.click(fragmentButton('git commit', 2))
     fireEvent.change(suffixInput(), { target: { value: '"第一次快照"' } })
     fireEvent.click(screen.getByLabelText('执行拼接的命令'))
@@ -553,8 +578,7 @@ describe('components —— CommandBuilder 拼接式输入', () => {
     fireEvent.keyDown(suffixInput(), { key: 'Enter' })
     expect(ran).toEqual([])
 
-    fireEvent.click(fragmentButton('git add', 0))
-    fireEvent.click(fragmentButton('git add', 1))
+    fireEvent.click(wordButton('git add'))
     fireEvent.keyDown(suffixInput(), { key: 'Enter' })
     expect(ran).toEqual(['git add'])
   })
@@ -562,13 +586,12 @@ describe('components —— CommandBuilder 拼接式输入', () => {
   it('换命令时预览整体切换，不残留上一条命令的参数', () => {
     render(<BuilderHarness level={level} />)
 
-    fireEvent.click(fragmentButton('git add', 0))
-    fireEvent.click(fragmentButton('git add', 1))
+    fireEvent.click(wordButton('git add'))
     fireEvent.click(fragmentButton('git add', 2))
     expect(previewText()).toBe('git add .')
 
     // 改点 commit：公共前缀 git 保留，`add .` 整段丢弃
-    fireEvent.click(fragmentButton('git commit', 1))
+    fireEvent.click(wordButton('git commit'))
     expect(previewText()).toBe('git commit')
 
     fireEvent.click(fragmentButton('git commit', 2))
@@ -578,13 +601,12 @@ describe('components —— CommandBuilder 拼接式输入', () => {
   it('换命令时丢弃上一条命令的手写后缀（避免把 add 的路径留在 commit 后面）', () => {
     render(<BuilderHarness level={level} />)
 
-    fireEvent.click(fragmentButton('git add', 0))
-    fireEvent.click(fragmentButton('git add', 1))
+    fireEvent.click(wordButton('git add'))
     fireEvent.change(suffixInput(), { target: { value: 'notes/x.md' } })
     expect(previewText()).toBe('git add notes/x.md')
 
     // 换到 commit：后缀属旧命令的上下文，必须一并丢弃
-    fireEvent.click(fragmentButton('git commit', 1))
+    fireEvent.click(wordButton('git commit'))
     expect(previewText()).toBe('git commit')
     expect(suffixInput().value).toBe('')
   })

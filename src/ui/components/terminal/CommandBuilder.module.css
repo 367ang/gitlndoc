@@ -7,6 +7,41 @@
   gap: var(--gtp-space-2);
 }
 
+/* 整词命令按钮行（M9）：每个命令组一个「git <子命令>」主按钮，一步拼出前缀+子命令 */
+.words {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gtp-space-2);
+}
+
+.word {
+  padding: var(--gtp-space-2) var(--gtp-space-4);
+  background: var(--gtp-color-surface-raised);
+  border: 1px solid var(--gtp-color-border-strong);
+  border-radius: var(--gtp-radius-pill);
+  color: var(--gtp-color-text);
+  font-family: var(--gtp-font-mono);
+  font-size: var(--gtp-font-size-sm);
+  font-weight: 600;
+  transition:
+    background var(--gtp-duration-fast) var(--gtp-ease-out),
+    border-color var(--gtp-duration-fast) var(--gtp-ease-out),
+    box-shadow var(--gtp-duration-fast) var(--gtp-ease-out);
+}
+
+.word:hover:not(:disabled) {
+  background: var(--gtp-color-nebula-deep);
+  border-color: var(--gtp-color-nebula);
+  box-shadow: var(--gtp-shadow-glow-nebula);
+}
+
+.word:disabled {
+  color: var(--gtp-color-text-dim);
+  border-color: var(--gtp-color-border);
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .fragments {
   display: flex;
   flex-wrap: wrap;

@@ -25,35 +25,36 @@ function exactText(text: string): RegExp {
   return new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)
 }
 
-/** 等待已进入关卡（拼接模式的就绪特征：命令预览 + 顶栏关卡 id） */
+/** 等待已进入关卡（拼接模式的就绪特征：命令预览 + 顶栏关卡徽标）。
+ *  ⚠️ 顶栏徽标用 class 定位（`_chapter_` 是 CSS Module 的稳定前缀）——
+ *  M9 起恢复横幅也含关卡 id，`getByText(levelId)` 会 strict mode 撞车。 */
 async function waitForLevel(page: Page, levelId: string): Promise<void> {
   await expect(page.locator('[data-testid="command-preview"]')).toBeVisible()
-  await expect(page.getByText(levelId)).toBeVisible()
+  await expect(page.locator('span[class*="_chapter_"]')).toHaveText(new RegExp(levelId))
 }
 
 /**
- * 点一个片段按钮（复刻 cdp-client.cjs 的 clickFrag 语义）：
- *   - slot0：每组的「git」起始词 —— 组的命令由 slot1 的 data-command 决定；
- *   - slot1：子命令按钮（`data-command="git <frag>"`）；置灰时先点组内 slot0；
- *   - slot2：参数按钮（组内 `data-command="git <group>"` 且文本 === frag）。
- * ⚠️ React 18 批处理：slot0 与 slot1 不可在同一同步块点击 —— Playwright 的
+ * 点一个片段按钮（M9）：
+ *   - 子命令（frag = 'init' / 'add' …）：整词按钮「git <frag>」（aria「拼接命令：git <frag>」）——
+ *     M9 起 slot0/slot1 片段不再渲染，起始词由组件自动补齐；
+ *     整词按钮是「有就点」的语义：`clickFrag(page, '.')` 这类参数先查整词按钮查不到，
+ *     自然落到 slot2 分支。
+ *   - 参数（frag = '.' / '-m' …）：slot2 按钮（组内 `data-command="git <group>"` 且文本 === frag）。
+ * ⚠️ React 18 批处理：同一同步块里的两次点击会被吞一次 —— Playwright 的
  * click 自带等 stable/enabled，天然满足「等 React 提交后再点下一个」。
  */
 async function clickFrag(page: Page, frag: string, group?: string): Promise<void> {
-  const groupName = group ?? frag
-  const slot1 = page.locator(`button[data-slot="1"][data-command="git ${frag}"]`)
-  if (await slot1.count()) {
-    if (await slot1.isDisabled()) {
-      // 该组还没起步：先点组内 slot0（「git」），解锁 slot1
-      await page.locator(`button[data-slot="0"][data-command="git ${groupName}"]`).click()
-    }
-    await slot1.click()
+  // 子命令：整词按钮（M9 的一步拼接入口）
+  const word = page
+    .locator(`button[data-command="git ${frag}"][aria-label="拼接命令：git ${frag}"]`)
+  if (await word.count()) {
+    await word.click()
     return
   }
-  // slot2（参数）依赖同组的 slot0+slot1 已就位 —— isFragmentEnabled 逐槽校验。
-  // 「先拼 git add 再点 .」的次序里 slot2 的解锁要等 slot1 的提交完成，
-  // Playwright 的 actionability 重试会处理；**正则精确文本匹配**（hasText 字符串
-  // 是子串匹配，'.' 会撞上 'README.md'）+ 组名锚定避免点错同名参数。
+  // 参数片段：slot2（`-m` / `.` / 路径）。「先拼 git add 再点 .」的次序里 slot2
+  // 的解锁要等整词按钮的提交完成，Playwright 的 actionability 重试会处理；
+  // **正则精确文本匹配**（hasText 字符串是子串匹配，'.' 会撞上 'README.md'）
+  // + 组名锚定避免点错同名参数。
   const scope = group
     ? page.locator(`button[data-slot="2"][data-command="git ${group}"]`, { hasText: exactText(frag) })
     : page.locator(`button[data-slot="2"]`, { hasText: exactText(frag) }).first()
@@ -179,5 +180,31 @@ test.describe('M7 主链路：intro → 1-1 通关 → 进度持久化', () => {
     await expect(page.getByTestId('hints-toggle')).toBeVisible()
     await page.getByTestId('hints-toggle').click()
     await expect(page.getByTestId('hints-toggle')).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  test('M9 续玩：中途退出后进度保留，再进同关出现「已恢复进度」横幅且命令历史还在', async ({ page }) => {
+    await page.getByRole('button', { name: '进入时间线检修台' }).click()
+    await page.locator('[aria-label="直接开始 ch1-1 时间线初始化"]').click()
+    await waitForLevel(page, 'ch1-1')
+
+    // 做一条中途进度（git add . 会失败但会留在历史里 —— 失败也是进度）
+    await clickFrag(page, 'add')
+    await typeSuffixAndRun(page, ' .')
+    await expect(page.getByTestId('command-history')).toContainText('git add')
+
+    // 中途退出（保留现场）→ 回菜单
+    await page.getByRole('button', { name: '返回菜单' }).click()
+    await expect(page.getByTestId('progress-summary')).toBeVisible()
+
+    // 再进同关：横幅出现 + 历史保留（不是从头开始）
+    await page.locator('[aria-label="直接开始 ch1-1 时间线初始化"]').click()
+    await waitForLevel(page, 'ch1-1')
+    await expect(page.getByTestId('resume-banner')).toBeVisible()
+    await expect(page.getByTestId('command-history')).toContainText('git add')
+
+    // 刷新：挂起关卡自动恢复，横幅仍在
+    await page.reload()
+    await expect(page.getByTestId('resume-banner')).toBeVisible()
+    await expect(page.locator('[data-testid="live-score"]')).toBeVisible()
   })
 })

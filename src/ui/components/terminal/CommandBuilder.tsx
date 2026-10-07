@@ -15,11 +15,12 @@
 // 这样的分工让「先点任意片段、再点任意片段都不会拼出语法非法的命令」
 // 这条要求可以被纯函数单测穷举覆盖，而不必渲染 React。
 
-import type { KeyboardEvent } from 'react'
+import { useMemo, type KeyboardEvent } from 'react'
 import {
-  applyFragment,
+  clickWordFragment,
   isFragmentEnabled,
   renderDraft,
+  wordFragments,
   type Draft,
   type Fragment,
 } from '../../../game/command/fragments'
@@ -53,10 +54,6 @@ export function CommandBuilder({
   // 片段拼出来的部分（只读展示）；玩家手写的后缀另算，见下方输入框
   const built = renderDraft({ slots: draft.slots })
 
-  function handleFragment(fragment: Fragment) {
-    onChange(applyFragment(draft, fragment, fragments))
-  }
-
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === 'Tab') {
       // Tab 补全（M4）：作用于手写后缀 —— 唯一匹配直接补全（附空格）；
@@ -86,16 +83,48 @@ export function CommandBuilder({
     if (command.trim().length > 0) onRun(command)
   }
 
-  // 按命令分组渲染：同一条命令的片段聚在一起，玩家一眼能看出拼到哪一步
+  // 按命令分组渲染参数片段：同一条命令的参数聚在一起。
+  // ⚠️ M9：slot0（裸 `git`）与 slot1（子命令）都不再渲染 ——
+  //   前者是每组一个、内容完全相同的「git」重复按钮（实测反馈「拼接词重复」的根源）；
+  //   后者与整词按钮语义重复（「git add」旁边再放一个「add」）。
+  //   只渲染参数片段（`-m` / `.` / 路径）；没有参数的命令组整组跳过（不渲染空盒子）。
   const groups: { command: string; items: Fragment[] }[] = []
   for (const fragment of fragments) {
+    if (fragment.slot < 2) continue
     const group = groups.find((item) => item.command === fragment.command)
     if (group) group.items.push(fragment)
     else groups.push({ command: fragment.command, items: [fragment] })
   }
 
+  // 整词快捷按钮（M9 体验修正）：每个命令组一个「git <子命令>」主按钮，
+  // 一步拼出前缀 + 子命令。
+  const wordButtons = useMemo(() => wordFragments(fragments), [fragments])
+
+  /** 片段点击统一入口：slot ≥ 1 的片段自动补齐起始词（玩家不再需要点「git」） */
+  function handleClick(fragment: Fragment) {
+    onChange(clickWordFragment(draft, fragment, fragments))
+  }
+
   return (
     <div className={styles.builder} data-testid="command-builder">
+      <div className={styles.words} role="group" aria-label="命令按钮">
+        {wordButtons.map((fragment) => (
+          // ⚠️ 整词按钮**恒可点**：它是起步 / 切换命令的入口 ——
+          //    点它一次就得到「git <子命令>」，无论当前草稿处于什么状态。
+          //    起始词由 clickWordFragment 自动补齐，无需玩家先点「git」。
+          <button
+            key={fragment.id}
+            className={styles.word}
+            type="button"
+            onClick={() => handleClick(fragment)}
+            data-command={fragment.command}
+            aria-label={`拼接命令：${fragment.label}`}
+          >
+            {fragment.label}
+          </button>
+        ))}
+      </div>
+
       <div className={styles.fragments} role="group" aria-label="命令片段">
         {groups.map((group) => (
           <div key={group.command} className={styles.group} aria-label={group.command}>
@@ -108,7 +137,7 @@ export function CommandBuilder({
                   key={fragment.id}
                   className={styles.fragment}
                   type="button"
-                  onClick={() => handleFragment(fragment)}
+                  onClick={() => handleClick(fragment)}
                   disabled={!enabled}
                   data-command={fragment.command}
                   data-slot={fragment.slot}
@@ -175,7 +204,7 @@ export function CommandBuilder({
       </div>
 
       <p className={styles.tip}>
-        依次点击片段拼出命令；带引号的提交信息请自己敲进输入框，看清整条命令后再执行。
+        点击命令按钮开始一条命令；再点参数（如 `-m`）补全，带引号的提交信息请自己敲进输入框，看清整条命令后再执行。
       </p>
     </div>
   )

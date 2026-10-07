@@ -11,18 +11,34 @@
   border-radius: var(--gtp-radius-md);
 }
 
+/* 收起态也要醒目（M9 体验修正）：提示按钮不再是「一行小字」，
+ * 用警示色胶囊按钮让玩家一眼看到「有提示可看」。 */
 .toggle {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--gtp-space-2);
-  padding: 0;
-  background: none;
-  border: none;
+  padding: var(--gtp-space-2) var(--gtp-space-3);
+  background: rgb(255 194 71 / 10%);
+  border: 1px solid var(--gtp-color-warning);
+  border-radius: var(--gtp-radius-pill);
   color: var(--gtp-color-warning);
-  font-size: var(--gtp-font-size-xs);
+  font-size: var(--gtp-font-size-sm);
+  font-weight: 600;
   text-align: left;
   cursor: pointer;
+  transition:
+    background var(--gtp-duration-fast) var(--gtp-ease-out),
+    box-shadow var(--gtp-duration-fast) var(--gtp-ease-out);
+}
+
+.toggle:hover {
+  background: rgb(255 194 71 / 20%);
+  box-shadow: 0 0 12px rgb(255 194 71 / 30%);
+}
+
+.toggleText {
+  overflow-wrap: anywhere;
 }
 
 .toggle:hover {
@@ -45,9 +61,9 @@
 .item {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: var(--gtp-space-1) var(--gtp-space-2);
-  border-left: 2px solid var(--gtp-color-warning);
+  gap: var(--gtp-space-1);
+  padding: var(--gtp-space-2) var(--gtp-space-3);
+  border-left: 3px solid var(--gtp-color-warning);
   background: var(--gtp-color-surface);
   border-radius: 0 var(--gtp-radius-sm) var(--gtp-radius-sm) 0;
 }
@@ -59,11 +75,14 @@
 
 .level {
   font-size: var(--gtp-font-size-xs);
-  color: var(--gtp-color-text-dim);
+  font-weight: 700;
+  color: var(--gtp-color-warning);
+  text-transform: uppercase;
 }
 
 .text {
-  font-size: var(--gtp-font-size-sm);
+  font-size: var(--gtp-font-size-md);
+  line-height: var(--gtp-line-height-normal);
   color: var(--gtp-color-text);
   overflow-wrap: anywhere;
 }

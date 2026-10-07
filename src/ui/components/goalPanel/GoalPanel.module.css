@@ -124,9 +124,14 @@
 
 .missing {
   margin: 0;
-  color: var(--gtp-color-text-muted);
+  padding: var(--gtp-space-2) var(--gtp-space-3);
+  background: rgb(255 194 71 / 8%);
+  border-left: 3px solid var(--gtp-color-warning);
+  border-radius: 0 var(--gtp-radius-sm) var(--gtp-radius-sm) 0;
+  color: var(--gtp-color-warning);
+  font-size: var(--gtp-font-size-sm);
 }
 
 .missingLabel {
-  color: var(--gtp-color-warning);
+  font-weight: 700;
 }
