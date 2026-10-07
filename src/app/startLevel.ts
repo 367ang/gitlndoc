@@ -21,11 +21,15 @@
 // 好过进到一个空仓库却以为关卡已就绪（§14 禁止伪造）。
 
 import { getLevel } from '../levels/chapters'
+import type { Level } from '../game/types'
 import { reset } from '../engine/sandbox'
 import {
   clearActiveLevel,
   clearSnapshot,
   exportSnapshot,
+  hasSnapshot,
+  importSnapshot,
+  loadActiveLevel,
   saveActiveLevel,
 } from '../persistence/snapshot'
 import { useSessionStore } from '../store/sessionStore'
@@ -51,12 +55,32 @@ export async function startLevel(levelId: string): Promise<StartLevelResult> {
     return { ok: false, error: `找不到关卡 ${levelId}，可能是关卡数据与菜单不同步。` }
   }
 
-  // 0) 清掉上一关的快照（M5a，§10「退出关卡清除」）。
-  //    本函数既是「进入某关」的入口，也就是「离开上一关」的唯一路径 ——
-  //    快照的清理挂在起点而不是各处的返回按钮上，避免遗漏某条退出路径。
+  // 0) 清掉**异关**的快照（M9 修订：同关快照改为「续玩」依据，见 1a）。
+  //    本函数既是「进入某关」的入口，也就是「换关」时清理旧关快照的唯一路径。
   const previousLevel = useSessionStore.getState().level?.id
   if (previousLevel !== undefined && previousLevel !== level.id) {
     await clearSnapshot(previousLevel)
+  }
+
+  // 1a) 续玩恢复（M9）：玩家中途退出过本关（挂起标记与快照都在、未通关）→
+  //     原样恢复现场，不 reset、不清历史。这是「进度不能保存」反馈的主修复。
+  //     「重玩本关」不会误入此分支：结算页先走 `completeLevel()` 清掉标记与快照，
+  //     条件不成立，自然落到下方的新开局。
+  //     恢复失败（快照损坏 / 导入异常）→ 静默走新开局，绝不把玩家卡在空仓库。
+  {
+    const record = useProgressStore.getState().levelRecords[level.id]
+    const cleared = record?.cleared === true
+    const hasPendingMark = loadActiveLevel()?.levelId === level.id
+    if (!cleared && hasPendingMark && (await hasSnapshot(level.id))) {
+      try {
+        const restored = await importSnapshot(level.id)
+        if (restored) {
+          return finishEnterLevel(level, { resume: true })
+        }
+      } catch (error) {
+        console.warn(`[startLevel] 续玩恢复 ${level.id} 失败，改走新开局：`, error)
+      }
+    }
   }
 
   // 1) 重建沙箱：清空虚拟根后按 level.init 写入文件与预置提交
@@ -82,18 +106,34 @@ export async function startLevel(levelId: string): Promise<StartLevelResult> {
     clearActiveLevel()
   }
 
-  // 3) 写入会话（顺带复位上一关的历史 / 输入 / 目标判定）
+  return finishEnterLevel(level, { resume: false })
+}
+
+/**
+ * 进关收尾（M9 从 startLevel 提出的共用后半段）：
+ * 写入会话、复位/保留结算信息、切视图。
+ *
+ * - 新开局：清历史 + 复位草稿 + 结算信息清零（`resume: false`）；
+ * - 续玩恢复：保留历史与草稿（现场原样），结算信息按「非首次」处理（`resume: true`）。
+ */
+function finishEnterLevel(level: Level, options: { resume: boolean }): StartLevelResult {
   const session = useSessionStore.getState()
-  session.setLevel(level)
-  session.clearHistory()
-  // 复位上一关残留的拼接草稿（否则新关卡一进来就带着上一关拼了一半的命令）
-  session.resetDraft()
-  // 结算信息复位（M3）：提示计数清零；firstAttempt 按进度库判定 ——
-  // 该关已有通关记录（重玩）或本会话内已进过（重试）都算「非首次」。
-  // ⚠️ M5a 复核（清偿 M3 遗留 2）：进度已持久化，故**重启浏览器后**重玩某关
-  //    依然会读到 cleared 记录 → firstAttempt 为 false，不再被误判为首次尝试。
-  const clearedBefore = useProgressStore.getState().levelRecords[level.id]?.cleared === true
-  session.setSettlement({ hintsUsed: 0, firstAttempt: !clearedBefore })
+  session.setLevel(level, { resumed: options.resume })
+
+  if (options.resume) {
+    // 续玩：命令历史与拼接草稿是「玩家做到哪了」的一部分，原样保留。
+    // 结算信息：本会话已累计的提示次数与首次尝试判定都应延续，不重置。
+  } else {
+    session.clearHistory()
+    // 复位上一关残留的拼接草稿（否则新关卡一进来就带着上一关拼了一半的命令）
+    session.resetDraft()
+    // 结算信息复位（M3）：提示计数清零；firstAttempt 按进度库判定 ——
+    // 该关已有通关记录（重玩）或本会话内已进过（重试）都算「非首次」。
+    // ⚠️ M5a 复核（清偿 M3 遗留 2）：进度已持久化，故**重启浏览器后**重玩某关
+    //    依然会读到 cleared 记录 → firstAttempt 为 false，不再被误判为首次尝试。
+    const clearedBefore = useProgressStore.getState().levelRecords[level.id]?.cleared === true
+    session.setSettlement({ hintsUsed: 0, firstAttempt: !clearedBefore })
+  }
 
   // 4) 切视图
   useViewStore.getState().goLevel(level.id)
@@ -101,22 +141,33 @@ export async function startLevel(levelId: string): Promise<StartLevelResult> {
 }
 
 /**
- * 离开关卡（回菜单 / 通关后返回）时的清理（M5a）。
+ * 离开关卡（回菜单 / 回章节）时的清理（M9 修订）。
  *
- * 三件事：
- *   1. 清掉 `gtp:active-level:v1` —— 否则下次刷新会**恢复到一个已经离开的关卡**；
- *   2. 删掉该关的快照（§10「退出关卡清除」）；
- *   3. 复位会话（当前关卡 / 历史 / 草稿 / 目标）。
+ * 原口径（M5a）是「退出即清除快照与挂起标记」，实测反馈「进度不能保存」——
+ * 玩家中途退出本想回头继续，结果进度全丢。修订为（用户裁定）：
  *
- * ⚠️ 与 `startLevel()` 的「清上一关快照」有重叠但不重复：
- *    `startLevel` 走的是「关卡 A → 关卡 B」的路径（会话里还留着 A）；
- *    本函数走的是「关卡 → 菜单」的路径（会话即将被清空）。
- *    两条路径都必须清理，因为会话状态在其中一条上会被提前复位。
+ *   - **中途退出保留全部现场**：快照、挂起标记、会话（命令历史 / 输入草稿 /
+ *     当前关卡对象）都留着 —— 它们是 `startLevel` 续玩恢复的全部依据；
+ *     这里只清「目标判定」这类瞬时状态（换关时 `setLevel` 本来就会归零它）。
+ *   - **通关离开才清理**：已结算的关卡没有「续玩」语义，照旧删快照、清标记、
+ *     复位会话（`completeLevel`），否则刷新会被「恢复」回一个已经通关的关卡。
+ *
+ * ⚠️ 视图切换仍由调用方（LevelScreen）负责 —— 本函数与 M5a 版一样不管路由。
  */
 export async function leaveLevel(): Promise<void> {
+  useSessionStore.getState().setTargetState(null)
+}
+
+/**
+ * 通关后离开（结算页 → 菜单 / 下一关前的收尾）：清快照、挂起标记与会话（M9）。
+ *
+ * ⚠️ 只有这一条路径才清「续玩现场」：通关关卡再「恢复」没有意义，
+ * 且会把结算页误当存档点（M5a 当时的顾虑，在这个路径上依然成立）。
+ * 结算页的「重玩本关 / 进入下一关」也先走它 —— 清现场后 startLevel
+ * 自然按新开局处理。
+ */
+export async function completeLevel(): Promise<void> {
   const current = useSessionStore.getState().level?.id
-  // ⚠️ 先清标记再删快照：即使删快照失败，「挂起标记已清」也能保证
-  //    boot 的恢复分支不会被走进来（宁可多占一点空间，不能恢复错状态）。
   clearActiveLevel()
   if (current !== undefined) {
     await clearSnapshot(current)

@@ -39,6 +39,30 @@ import { useCompletionCandidates } from '../../hooks/useCompletionCandidates'
 import { useTargetState } from '../../hooks/useTargetState'
 import styles from './LevelScreen.module.css'
 
+/**
+ * 「已恢复进度」横幅（M9）：续玩恢复 / 刷新恢复后展示在关卡页顶部。
+ * 纯展示：本地 state 控制关闭，不进 store（一次性 UI 状态）。
+ */
+function ResumeBanner({ levelId }: { levelId: string }) {
+  const [dismissed, setDismissed] = useState(false)
+  if (dismissed) return null
+  return (
+    <div className={styles.resumeBanner} role="status" data-testid="resume-banner">
+      <span>
+        ⏱ 已恢复上次的进度（{levelId}）—— 仓库状态与你离开时一致，接着修这条时间线就好。
+      </span>
+      <button
+        type="button"
+        onClick={() => setDismissed(true)}
+        aria-label="关闭恢复提示"
+        className={styles.resumeClose}
+      >
+        知道了
+      </button>
+    </div>
+  )
+}
+
 export function LevelScreen() {
   const level = useSessionStore((state) => state.level)
   const history = useSessionStore((state) => state.history)
@@ -47,6 +71,8 @@ export function LevelScreen() {
   const resetDraft = useSessionStore((state) => state.resetDraft)
   const appendEntry = useSessionStore((state) => state.appendEntry)
   const markHintUsed = useSessionStore((state) => state.markHintUsed)
+  // M9：本次进入是否为「续玩恢复」（中途退出再进 / 刷新恢复），驱动顶部恢复横幅
+  const resumed = useSessionStore((state) => state.resumed)
   // M7 设置开关：关闭提示时不渲染 HintsPanel（见下方 JSX 处的说明）
   const hintsEnabled = useProgressStore((state) => state.settings.hintsEnabled)
   const goMenu = useViewStore((state) => state.goMenu)
@@ -183,6 +209,10 @@ export function LevelScreen() {
 
   return (
     <main className={styles.screen}>
+      {/* M9：续玩恢复横幅 —— 让「进度已恢复」从猜测变成明示。
+          只在恢复进入时渲染（新开局 / 换关不出现），玩家可手动关闭。 */}
+      {resumed && <ResumeBanner levelId={level?.id ?? ''} />}
+
       <header className={styles.header}>
         <div className={styles.heading}>
           <h1 className={styles.title}>{level ? level.title : '自由沙箱'}</h1>

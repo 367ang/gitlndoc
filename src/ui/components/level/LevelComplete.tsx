@@ -16,7 +16,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { getAllLevels, getChapterLevels, getLevel } from '../../../levels/chapters'
-import { leaveLevel, startLevel } from '../../../app/startLevel'
+import { leaveLevel, completeLevel, startLevel } from '../../../app/startLevel'
 import { useSessionStore } from '../../../store/sessionStore'
 import { useProgressStore } from '../../../store/progressStore'
 import { useViewStore } from '../../../store/viewStore'
@@ -107,23 +107,27 @@ export function LevelComplete() {
   async function handleStart(levelId: string) {
     setError(null)
     setBusy(true)
+    // ⚠️ 先 completeLevel() 再 startLevel()：把「通关收尾」与「重玩意图」
+    //    显式告诉 startLevel —— 它看到「同关 + 会话已清空」就不会走续玩恢复，
+    //    而是按新开局重建沙箱（结算页的「重玩本关」语义）。
+    await completeLevel()
     const result = await startLevel(levelId)
     setBusy(false)
     if (!result.ok) setError(result.error)
   }
 
   /**
-   * 返回菜单（M5a）。
+   * 返回菜单（M9）。
    *
-   * ⚠️ 必须走 `leaveLevel()` 而不是直接 `goMenu()`：本关已经**结算完成**，
-   * 若不清掉 `gtp:active-level:v1`，玩家刷新浏览器后会被「恢复」回一个已经
-   * 通关的关卡 —— 那不是「恢复中途进度」，而是把结算页当成了存档点。
-   * `leaveLevel()` 同时负责删掉本关快照并复位会话。
+   * ⚠️ 必须走 `completeLevel()`（原 leaveLevel 的通关分支）而不是直接 `goMenu()`：
+   * 本关已经**结算完成**，若不清掉 `gtp:active-level:v1` 与快照，玩家刷新浏览器后
+   * 会被「恢复」回一个已经通关的关卡 —— 那不是「恢复中途进度」，而是把结算页
+   * 当成了存档点。中途退出（关卡内）才保留现场（M9 的「续玩」口径）。
    */
   async function handleBackToMenu() {
     setBusy(true)
     try {
-      await leaveLevel()
+      await completeLevel()
     } finally {
       setBusy(false)
       goMenu()

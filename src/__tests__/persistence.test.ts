@@ -37,6 +37,9 @@ import {
 import { hasSavedProgress, resumeInterruptedLevel } from '../persistence/boot'
 import { useProgressStore } from '../store/progressStore'
 import { useSessionStore } from '../store/sessionStore'
+import { CHAPTERS, getLevel } from '../levels/chapters'
+import { completeLevel, leaveLevel, startLevel } from '../app/startLevel'
+import { useViewStore } from '../store/viewStore'
 
 /** 直接往 storage 里塞原始字符串（模拟被手改 / 旧版本写坏的数据） */
 function putRaw(key: string, value: string): void {
@@ -433,5 +436,97 @@ describe('persistence/boot —— boot 分流判据', () => {
     } finally {
       Object.defineProperty(globalThis, 'localStorage', { value: original, configurable: true })
     }
+  })
+})
+
+// ── M9：中途退出续玩（实测反馈「进度不能保存」的主修复）──────────────────
+
+describe('app/startLevel —— 中途退出续玩（M9）', () => {
+  /** 造一个挂起中的 1-1 现场：进关 → 写一条历史 → 模拟中途退出（leaveLevel） */
+  async function suspendCh1_1(): Promise<void> {
+    // sessionStore 是模块级单例：先复位，避免上一条用例的历史残留
+    useSessionStore.getState().resetSession()
+    const level = getLevel('ch1-1')
+    if (level === null) throw new Error('关卡数据缺失')
+    useViewStore.setState({ view: 'level', chapterId: 'ch1', levelId: 'ch1-1' })
+    useSessionStore.getState().setLevel(level)
+    useSessionStore.getState().setSettlement({ hintsUsed: 0, firstAttempt: true })
+    // 模拟玩家已执行命令后导出快照（真实路径是 LevelScreen 的 handleExecuted）
+    const { reset } = await import('../engine/sandbox')
+    await reset(level.init)
+    const { exportSnapshot, saveActiveLevel } = await import('../persistence/snapshot')
+    await exportSnapshot('ch1-1')
+    saveActiveLevel('ch1-1')
+    useSessionStore.getState().appendEntry({
+      input: 'git init',
+      tokens: ['git', 'init'],
+      ok: true,
+      output: [],
+      undoable: false,
+    })
+    await leaveLevel()
+  }
+
+  it('中途退出保留挂起标记与快照（续玩的依据）', async () => {
+    await suspendCh1_1()
+    const { loadActiveLevel, hasSnapshot } = await import('../persistence/snapshot')
+    expect(loadActiveLevel()?.levelId).toBe('ch1-1')
+    expect(await hasSnapshot('ch1-1')).toBe(true)
+  })
+
+  it('中途退出后再进同关：恢复现场而不是重开（历史保留、resumed 标记为真）', async () => {
+    await suspendCh1_1()
+
+    const result = await startLevel('ch1-1')
+    expect(result.ok).toBe(true)
+    // 会话恢复：历史还在（git init 那条）、resumed 标记立起
+    const session = useSessionStore.getState()
+    expect(session.level?.id).toBe('ch1-1')
+    expect(session.history).toHaveLength(1)
+    expect(session.history[0]?.input).toBe('git init')
+    expect(session.resumed).toBe(true)
+    // 沙箱没有被 reset 重建 —— 虚拟根仍是挂起时的仓库内容（1-1 预置的 README.md）
+    const { fsp } = await import('../engine/fs')
+    const content = await fsp.readFile('/repo/README.md', 'utf8')
+    expect(content).toContain('时间线残片')
+  })
+
+  it('通关后离开：照旧清快照与挂起标记（刷新不会恢复回已通关的关卡）', async () => {
+    await suspendCh1_1()
+    useProgressStore.getState().setLevelRecord('ch1-1', { score: 100, stars: 3, cleared: true })
+
+    await completeLevel()
+
+    const { loadActiveLevel, hasSnapshot } = await import('../persistence/snapshot')
+    expect(loadActiveLevel()).toBeNull()
+    expect(await hasSnapshot('ch1-1')).toBe(false)
+  })
+
+  it('通关后重玩同关：不走续玩恢复，重新开局（历史清空）', async () => {
+    await suspendCh1_1()
+    useProgressStore.getState().setLevelRecord('ch1-1', { score: 100, stars: 3, cleared: true })
+    // 模拟结算页路径：先 completeLevel（清挂起标记与快照），再 startLevel
+    await completeLevel()
+
+    const result = await startLevel('ch1-1')
+    expect(result.ok).toBe(true)
+    const session = useSessionStore.getState()
+    expect(session.history).toHaveLength(0)
+    expect(session.resumed).toBe(false)
+  })
+
+  it('换关：旧关快照被清理（现场只保留给当前挂起的那一关）', async () => {
+    await suspendCh1_1()
+    const { hasSnapshot } = await import('../persistence/snapshot')
+    expect(await hasSnapshot('ch1-1')).toBe(true)
+
+    // 会话还在 ch1-1 时进入 ch1-2（换关路径）
+    useSessionStore.getState().setLevel(getLevel('ch1-1'))
+    const result = await startLevel('ch1-2')
+    expect(result.ok).toBe(true)
+    expect(await hasSnapshot('ch1-1')).toBe(false)
+    // ch1-2 自己的快照已建立
+    expect(await hasSnapshot('ch1-2')).toBe(true)
+    void CHAPTERS
   })
 })

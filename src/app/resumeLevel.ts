@@ -49,9 +49,11 @@ export async function resumeLevel(levelId: string): Promise<ResumeLevelResult> {
   const restored = await importSnapshot(levelId)
   if (!restored) return { ok: false, reason: 'failed' }
 
-  // 2) 写入会话状态（与 startLevel 的后半段一致）
+  // 2) 写入会话状态（与 startLevel 的后半段一致）。
+  //    `resumed: true`（M9）：LevelScreen 据此展示「已恢复进度」横幅 ——
+  //    实测反馈：刷新恢复后没有任何提示，玩家分不清是续玩还是重开。
   const session = useSessionStore.getState()
-  session.setLevel(level)
+  session.setLevel(level, { resumed: true })
   session.clearHistory()
   session.resetDraft()
 

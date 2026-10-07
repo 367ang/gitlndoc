@@ -135,6 +135,38 @@
   min-height: 0;
 }
 
+/* ── M9：续玩恢复横幅 ── */
+.resumeBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gtp-space-3);
+  padding: var(--gtp-space-2) var(--gtp-space-4);
+  background: rgb(47 214 179 / 10%);
+  border: 1px solid var(--gtp-color-branch-teal);
+  border-radius: var(--gtp-radius-md);
+  color: var(--gtp-color-branch-teal);
+  font-size: var(--gtp-font-size-sm);
+}
+
+.resumeClose {
+  flex-shrink: 0;
+  padding: var(--gtp-space-1) var(--gtp-space-3);
+  background: transparent;
+  border: 1px solid var(--gtp-color-branch-teal);
+  border-radius: var(--gtp-radius-pill);
+  color: var(--gtp-color-branch-teal);
+  font-size: var(--gtp-font-size-xs);
+  transition:
+    background var(--gtp-duration-fast) var(--gtp-ease-out),
+    color var(--gtp-duration-fast) var(--gtp-ease-out);
+}
+
+.resumeClose:hover {
+  background: var(--gtp-color-branch-teal);
+  color: var(--gtp-color-void);
+}
+
 /* 窄屏（M2 只保证桌面可用，此处避免布局崩坏） */
 @media (max-width: 900px) {
   .columns {

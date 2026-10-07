@@ -41,6 +41,12 @@ export interface SessionState {
    */
   targetState: TargetState | null
   /**
+   * 本次会话是否由「续玩恢复」进入（M9：中途退出再进 / 刷新恢复）。
+   * LevelScreen 据此展示「已恢复进度」横幅 —— 实测反馈：恢复后没有任何提示，
+   * 玩家分不清是续玩还是重开（恢复的仓库在文件树里，但不够显眼）。
+   */
+  resumed: boolean
+  /**
    * 结算所需的会话侧信息（M3）。
    * `hintsUsed`：本关累计查看的提示条数（Hints 面板每解锁一条记一次）；
    * `firstAttempt`：本关是否首次尝试（重玩 / 重试后为 false）——
@@ -48,7 +54,8 @@ export interface SessionState {
    */
   settlement: { hintsUsed: number; firstAttempt: boolean; hintCountedLevel: number }
 
-  setLevel: (level: Level | null) => void
+  /** 写入关卡并复位目标判定；`resumed: true` 表示本次进入是「续玩恢复」（M9） */
+  setLevel: (level: Level | null, options?: { resumed?: boolean }) => void
   /** 追加一条命令历史；自动补上递增 id（`cmd-<n>`）与时间戳 `ts` */
   appendEntry: (entry: CommandEntryInput) => void
   clearHistory: () => void
@@ -76,10 +83,11 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
   draft: EMPTY_DRAFT,
   nextEntryId: 1,
   targetState: null,
+  resumed: false,
   settlement: { hintsUsed: 0, firstAttempt: true, hintCountedLevel: 0 },
 
   // 换关时一并清掉上一关的目标判定结果，避免新关卡首帧闪出旧勾选
-  setLevel: (level) => set({ level, targetState: null }),
+  setLevel: (level, options) => set({ level, targetState: null, resumed: options?.resumed === true }),
 
   appendEntry: (entry) => {
     const id = get().nextEntryId
@@ -119,6 +127,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
       history: [],
       draft: EMPTY_DRAFT,
       targetState: null,
+      resumed: false,
       settlement: { hintsUsed: 0, firstAttempt: true, hintCountedLevel: 0 },
     }),
 }))
